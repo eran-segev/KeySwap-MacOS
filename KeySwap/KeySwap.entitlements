@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Required for Accessibility API (AXUIElement read/write) and synthetic CGEvent injection.
+        SEC-4: com.apple.security.cs.disable-library-validation is NOT included here.
+        Test on Mac without it first (per Design Change 7 / SEC-4 verification plan).
+        If CGEventTap creation fails without it, investigate before adding.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <!--
+        Hardened runtime required for Developer ID notarization.
+        Enable for release builds via Build Settings → Hardened Runtime = YES.
+    -->
+</dict>
+</plist>

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Background daemon: no Dock icon, no window at launch -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>CFBundleName</key>
+    <string>KeySwap</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>KeySwap</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.ersegev.KeySwap</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+
+    <key>CFBundleExecutable</key>
+    <string>KeySwap</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>CFBundleSignature</key>
+    <string>????</string>
+
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- Accessibility permission usage description (shown in System Settings) -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>KeySwap reads selected text to detect the wrong keyboard layout, and writes the corrected text back. This permission is never used to read anything other than what you've explicitly selected.</string>
+
+    <!-- Login item: allow user to re-enable from System Settings if they remove it -->
+    <key>SMPrivilegedExecutables</key>
+    <dict/>
+</dict>
+</plist>
