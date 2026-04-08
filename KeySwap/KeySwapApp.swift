@@ -275,7 +275,32 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         // 3. Detect direction + translate
         let direction = layoutSwitcher.swapDirection()
         let targetLanguage: TargetLanguage = direction == .hebrewToEnglish ? .english : .hebrew
-        let translated = translationEngine.translate(text, to: targetLanguage, fallbackMacroUsed: fallbackUsed)
+
+        // 3a. Buffer enrichment: recover Shift+letter characters swallowed on Hebrew layout
+        var textToTranslate = text
+        var shiftIndices = Set<Int>()
+        if direction == .hebrewToEnglish,
+           let enrichment = hotkeyListener.keystrokeBuffer.enrichedText(fieldText: text) {
+            textToTranslate = enrichment.text
+            shiftIndices = enrichment.shiftIndices
+            #if DEBUG
+            print("[SwapPipeline] Step 3a: buffer enrichment applied (field=\(text.count) chars → enriched=\(enrichment.text.count) chars, shifts=\(shiftIndices))")
+            #endif
+        }
+
+        var translated = translationEngine.translate(textToTranslate, to: targetLanguage, fallbackMacroUsed: fallbackUsed)
+
+        // 3b. Uppercase characters recovered from Shift+letter keystrokes.
+        // The user held Shift intentionally — preserve their capitalization intent.
+        if targetLanguage == .english && !shiftIndices.isEmpty {
+            var chars = Array(translated)
+            for idx in shiftIndices where idx < chars.count {
+                if chars[idx].isLetter {
+                    chars[idx] = Character(String(chars[idx]).uppercased())
+                }
+            }
+            translated = String(chars)
+        }
         #if DEBUG
         print("[SwapPipeline] Step 3: direction=\(direction), target=\(targetLanguage), translated=\"\(translated.prefix(50))\"")
         #endif
@@ -327,6 +352,9 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         // Cancel the SLA timeout
         slaTimeoutItem?.cancel()
         slaTimeoutItem = nil
+
+        // Clear keystroke buffer after every swap attempt (success or failure)
+        hotkeyListener.keystrokeBuffer.clear()
 
         if success {
             flashSuccess()

@@ -32,6 +32,10 @@ final class GlobalHotkeyListener {
     // Re-entrancy guard — set true at swap entry, cleared by the pipeline.
     private(set) var isSwapping: Bool = false
 
+    // Passive keystroke buffer for recovering Shift+letter characters
+    // swallowed by macOS on the Hebrew layout. See KeystrokeBuffer.swift.
+    let keystrokeBuffer = KeystrokeBuffer()
+
     // MARK: - Tap lifecycle
 
     func start() {
@@ -165,10 +169,16 @@ final class GlobalHotkeyListener {
         // SECURITY GATE: return immediately for non-keyDown events
         guard type == .keyDown else { return event }
 
-        // SECURITY GATE: check keyCode FIRST — no logging/processing of non-F9 events
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        // Record into keystroke buffer (SEC-1 exception: keycode + shift flag only).
+        // F9 (0x65) is not in characterKeyCodes so record() is a no-op for it.
+        // See KeystrokeBuffer.swift for security invariants.
+        keystrokeBuffer.record(keyCode: keyCode, flags: event.flags)
+
+        // SECURITY GATE: only F9 proceeds past this point
         guard keyCode == Self.f9KeyCode else {
-            return event // pass through immediately, zero side effects
+            return event // pass through immediately
         }
 
         // Only F9 / Shift+F9 reaches here. Consume the event.
@@ -240,12 +250,10 @@ private func globalHotkeyCallback(
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         if keyCode == 100 { // F9
             print("[C-CALLBACK] >>> F9 keyDown received in raw event tap callback")
-        } else {
-            // Temporary: log all keyDown codes so we can verify the tap is alive
-            print("[C-CALLBACK] keyDown keyCode=\(keyCode)")
         }
+        // SEC-1: Do NOT log non-F9 keycodes. Buffer recording handles observation.
     } else if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        print("[C-CALLBACK] ⚠️ Event tap was DISABLED by system (type=\(type.rawValue))")
+        print("[C-CALLBACK] Event tap was DISABLED by system (type=\(type.rawValue))")
     }
     #endif
 

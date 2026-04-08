@@ -327,11 +327,40 @@ func eventTapCallback(proxy: CGEventTapProxy,
 ```
 
 **Rules:**
-- The `guard keyCode == 100` check MUST be the first logic after the event type check. No logging, no variable assignment, nothing before this gate.
-- Non-F9 events MUST be returned via `Unmanaged.passRetained(event)` with zero processing.
+- The `guard keyCode == 100` check MUST be the first logic after the event type check, except for the keystroke buffer recording (see SEC-1a below).
+- Non-F9 events MUST be returned via `Unmanaged.passRetained(event)` with zero processing beyond buffer recording.
 - No `print()`, `os_log()`, or any form of output for non-F9 events. Ever.
 
-**Test:** Unit test that mocks the callback with keyCode != 100 and asserts the event is returned immediately with no side effects.
+**Test:** Unit test that mocks the callback with keyCode != 100 and asserts the event is returned immediately with no side effects (beyond buffer recording).
+
+### SEC-1a: Keystroke Buffer Exception (SCOPED)
+
+**Context:** The P1 bug "Shift+letter dropped on Hebrew layout" requires a passive keystroke buffer to recover swallowed characters. The buffer records minimal event data for all character-producing keyDown events, before the F9 gate.
+
+**What IS recorded (per keyDown):**
+
+- Virtual keycode (integer, 0x00–0x32 range)
+- Whether Shift was held (boolean)
+
+**What is NOT recorded:**
+
+- The event's Unicode string output (`event.characters` / `getUnicodeString()` is never called)
+- The target application's name or bundle ID
+- The content of any text field
+- Any modifier combination other than Shift (Cmd, Ctrl, Option trigger buffer invalidation, not recording)
+
+**Security invariants:**
+
+1. Buffer is in-memory only, never persisted to disk
+2. Bounded at 64 entries (~1KB), ring buffer overwrites oldest
+3. Cleared on: navigation keys, backspace, Cmd/Ctrl/Option combos, and after every swap
+4. `IsSecureEventInputEnabled()` blocks the CGEventTap entirely when a password field is focused — the buffer cannot capture password keystrokes
+5. Buffer contains no Unicode text — only integer keycodes and booleans
+6. Buffer is consumed at swap time and immediately cleared
+
+**Trust model:** The app already holds Input Monitoring permission (sees all keystrokes). The buffer does not grant new capabilities — it stores a bounded subset of information the app already receives and discards. The key distinction is preserved: **the app does NOT modify keystrokes in real-time**. It only observes passively and acts on-demand when F9 is pressed.
+
+**Test:** Verify buffer is cleared after every swap. Verify buffer does not record during secure input. Verify Cmd/Ctrl combos trigger buffer invalidation.
 
 ### SEC-2: AXUIElement Read Scope (HIGH)
 

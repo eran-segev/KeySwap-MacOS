@@ -16,6 +16,7 @@
 		CC1C2F6E848D53A163E3F856 /* KeySwapApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFD742002F802FF661CDDBE /* KeySwapApp.swift */; };
 		D36B19C9949AFA46C48AE9A0 /* LayoutSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7CED3D9DA0AB18F97E5908 /* LayoutSwitcher.swift */; };
 		E7686A3FD429617E676BC922 /* GlobalHotkeyListener.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBC684811E25AFF9F1C61DA1 /* GlobalHotkeyListener.swift */; };
+		A1B2C3D4E5F60718A1B2C3D4 /* KeystrokeBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718A1B2C3D5 /* KeystrokeBuffer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +30,7 @@
 		D1E9E3FBFB71BA288DE066A8 /* AboutWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutWindow.swift; sourceTree = "<group>"; };
 		D6F19D0FD4C4D12FAD238D2F /* TranslationContext */ = {isa = PBXFileReference; lastKnownFileType = folder; path = TranslationContext; sourceTree = SOURCE_ROOT; };
 		E514C41049CD9FE430FB0053 /* PermissionsRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsRouter.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718A1B2C3D5 /* KeystrokeBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeystrokeBuffer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +53,7 @@
 				0DD5462A41A636F3A1BE77B1 /* AppState.swift */,
 				83B39157E7D4154AFDDFC4B9 /* ClipboardManager.swift */,
 				CBC684811E25AFF9F1C61DA1 /* GlobalHotkeyListener.swift */,
+				A1B2C3D4E5F60718A1B2C3D5 /* KeystrokeBuffer.swift */,
 				3AFD742002F802FF661CDDBE /* KeySwapApp.swift */,
 				9C7CED3D9DA0AB18F97E5908 /* LayoutSwitcher.swift */,
 				E514C41049CD9FE430FB0053 /* PermissionsRouter.swift */,
@@ -149,6 +152,7 @@
 				922EF25C51E56088892DA15D /* AppState.swift in Sources */,
 				8272ABE235D72C065F1DF93A /* ClipboardManager.swift in Sources */,
 				E7686A3FD429617E676BC922 /* GlobalHotkeyListener.swift in Sources */,
+				A1B2C3D4E5F60718A1B2C3D4 /* KeystrokeBuffer.swift in Sources */,
 				CC1C2F6E848D53A163E3F856 /* KeySwapApp.swift in Sources */,
 				D36B19C9949AFA46C48AE9A0 /* LayoutSwitcher.swift in Sources */,
 				12D70ABA5F33BFAEEA555956 /* PermissionsRouter.swift in Sources */,
