@@ -25,7 +25,7 @@ Items deferred during CEO review (2026-04-02). Not in MVP scope.
 
 ## P3 — Next Up
 
-- [ ] **Post-swap spell check:** After converting characters, run the translated English output through `NSSpellChecker` to silently correct user typos (e.g., "teh" → "the") that survived the layout swap.
+- [x] **Post-swap spell check:** After converting characters, run the translated English output through `NSSpellChecker` to silently correct user typos (e.g., "teh" → "the") that survived the layout swap.
   - **Architecture:** `SpellCheckFilter` struct in TranslationContext package with an injectable `CorrectionProvider` protocol (AppKit stays in the app layer). `NSSpellCheckerProvider` in KeySwapApp implements the protocol.
   - **CorrectionProvider has two methods** (eng review finding — keeps NSSpellChecker entirely out of the package):
     - `misspelledRange(in:startingAt:) -> NSRange`
@@ -39,3 +39,6 @@ Items deferred during CEO review (2026-04-02). Not in MVP scope.
   - **Tests:** `MockCorrectionProvider` must be a **class** (not struct) with an explicit `[NSRange]` queue it pops sequentially. Required test cases: Hebrew no-op, empty string, no misspellings fast path, single correction, longer correction, **multi-misspelling back-to-front** (`"teh recieve foo"` → `"the receive foo"`), nil correction path.
   - **Scope:** English target only.
   - **Design doc:** `~/.gstack/projects/eran-segev-KeySwap-MacOS/eransegev-main-design-20260408-234220.md`
+  - **Shipped:** 2026-04-09 (commits 5b2b4b9 + e7eff10). Two bugs found during testing and fixed:
+    1. **SpellCheckFilter infinite loop:** `NSSpellChecker` returned a non-advancing range for some inputs; Phase 1 while-loop never exited. Fix: `guard nextOffset > offset else { break }` in `SpellCheckFilter.postProcess`.
+    2. **Cursor at line start after swap:** `kAXSelectedTextAttribute` write with a backward selection (created by `Cmd+Shift+Left` fallback) left cursor at position 0. Fix: read `kAXSelectedTextRangeAttribute` before write, then explicitly reposition to `selRange.location + text.utf16.count` after write.
