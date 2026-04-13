@@ -485,3 +485,107 @@ Security review adds 4 new test cases:
 - SEC-4: CGEventTap works without disable-library-validation (Phase 2 Mac verification)
 
 **New total: 60 test cases** (18 Phase 1 + 28 Phase 2 unit + 14 E2E)
+
+---
+
+## Post-MVP Additions (2026-04-xx)
+
+After MVP v1.0 shipped, the following items were implemented beyond the original scope:
+
+### P1 Bug Fix: Shift+Letter Characters on Hebrew Layout
+
+**Issue:** macOS swallows Shift+letter keystrokes on the Hebrew keyboard layout. When a user presses Shift+A on the Hebrew layout intending to type a capital letter, nothing appears. This breaks the Shift+letter → Hebrew translation because there's no character to swap.
+
+**Solution:** Passive keystroke buffer ([KeystrokeBuffer.swift](../KeySwap/KeystrokeBuffer.swift)) records recent letter keycode + Shift state before the F9 gate. When a Shift+letter swap is triggered, the buffer provides the missing keystroke data so the swap can proceed.
+
+**Implementation Details:**
+
+- Bounded ring buffer (64 entries, ~1KB) stores only keycode (integer) + Shift flag (boolean)
+- Cleared after every swap, on navigation keys, and on Cmd/Ctrl combos
+- Does NOT record Unicode text, app names, or field content
+- Security invariant: IsSecureEventInputEnabled() blocks the entire CGEventTap during password entry, so the buffer cannot capture sensitive keystrokes
+- See SEC-1a in main security review for full threat model
+
+**Testing:**
+
+- Unit test: Verify buffer is cleared after every swap
+- Unit test: Verify buffer does not record during secure input (password fields)
+- E2E: Test Shift+Hebrew letters work correctly before and after swap on real Mac
+
+### P3 Feature: Post-Swap Spell Check
+
+**Feature:** After translating Hebrew text to English, common misspellings are automatically corrected. For example: "teh" → "the", "waht" → "what".
+
+**Implementation:** [SpellCheckFilter.swift](../TranslationContext/Sources/TranslationContext/SpellCheckFilter.swift) + [SpellCheckFilterTests.swift](../TranslationContext/Tests/TranslationContextTests/SpellCheckFilterTests.swift)
+
+**Architecture:**
+
+- Pure Swift (no AppKit dependency) with injected `CorrectionProvider` protocol
+- `CorrectionProvider` interface allows swappable spell-check backends (macOS NSSpellChecker in production, mock in tests)
+- Only corrects English output (`language == .english`). Hebrew text bypassed unchanged.
+- Scans input for misspelled ranges, then applies corrections back-to-front to preserve NSRange positions during variable-length replacements
+
+**Usage:**
+
+```swift
+public protocol CorrectionProvider {
+    func misspelledRange(in text: String, startingAt offset: Int) -> NSRange
+    func correction(forWord word: String, in text: String) -> String?
+}
+
+let filter = SpellCheckFilter()
+let corrected = filter.postProcess(swappedText, language: .english, provider: spellChecker)
+```
+
+**Test Coverage:**
+
+- Hebrew target is a no-op (provider not called, text unchanged)
+- Empty string fast-path (no provider call)
+- No misspellings found (fast-path, no corrections)
+- Single and multiple misspellings detected and corrected
+- Overlapping ranges handled correctly
+- Off-by-one edge cases in NSRange boundaries
+
+**Future Extensibility (P2):**
+
+- Spell check toggle in Preferences window (disable if false positives are annoying)
+- When disabled, inject `NoOpCorrectionProvider` that returns nil for all words
+- User preference stored in UserDefaults
+
+### Bug Fix: Cursor Position After Cmd+Shift+Left Fallback
+
+**Issue:** When the Cmd+Shift+Left fallback is used to select the current line, the cursor sometimes lands at the beginning of the selection instead of at the end of the injected text.
+
+**Root Cause:** The fallback selection may include leading whitespace. When replaced, the cursor position was not adjusted for the variable-length replacement.
+
+**Fix:** Ensure that after injecting translated text via AX write or Cmd+V, the cursor is repositioned to the end of the new text rather than at the selection start.
+
+---
+
+## Architecture Summary
+
+**Files (12 total):**
+
+```text
+TranslationContext/              (Swift Package)
+├── Sources/TranslationContext.swift
+├── Sources/SpellCheckFilter.swift
+└── Tests/
+    ├── TranslationContextTests.swift
+    └── SpellCheckFilterTests.swift
+
+KeySwap/                         (macOS Daemon)
+├── KeySwapApp.swift
+├── AppState.swift
+├── PermissionsRouter.swift
+├── GlobalHotkeyListener.swift
+├── KeystrokeBuffer.swift        ← P1 fix
+├── AccessibilityInteractor.swift
+├── ClipboardManager.swift
+├── LayoutSwitcher.swift
+└── AboutWindow.swift
+```
+
+**Modularity:**
+
+Core translation logic (TranslationContext) is platform-agnostic and fully tested in isolation. Post-processing (spell check) is also decoupled. Daemon shell (KeySwap) is thin and focused on macOS integration.

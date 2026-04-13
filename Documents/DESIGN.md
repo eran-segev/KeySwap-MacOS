@@ -57,12 +57,12 @@
 ## Layout
 - **Approach:** Native macOS conventions (grid-disciplined within Apple HIG)
 - **Window sizes:**
-  - Permissions onboarding: 480x360 (compact, one permission per screen)
+  - Permissions onboarding: 480x340 (single window, both permissions with status)
   - About window: 300x200 (standard macOS about size)
   - Future settings: 500x400 (standard preferences size)
-- **Alignment:** Left-aligned labels, right-aligned controls (macOS convention)
+- **Alignment:** Left-aligned buttons, right-aligned status indicators (macOS convention)
 - **Border radius:** System default (NSVisualEffectView handles this)
-- **Permissions flow:** Stepped, one permission per screen. One clear ask at a time.
+- **Permissions flow:** Single window with both permissions shown side-by-side, each with live status. User grants both sequentially in one window; both buttons remain active until granted.
 
 ## Motion
 - **Approach:** Minimal-functional
