@@ -9,3 +9,9 @@ DerivedData/
 .netrc
 *.xcuserstate
 xcuserdata/
+
+# Release artifacts
+release/
+*.dmg
+*.zip
+/build/
