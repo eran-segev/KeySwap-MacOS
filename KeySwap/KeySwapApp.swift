@@ -101,16 +101,10 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         // Warm it up on a background queue at launch so the first real swap is fast.
         DispatchQueue.global(qos: .utility).async {
             _ = NSSpellChecker.shared.checkSpelling(of: "warmup", startingAt: 0)
-
-            // Pre-learn common Hebrew transliterations that NSSpellChecker would
-            // otherwise silently "correct" (Dvir→Diver, Tzvi→TV, etc.).
-            let hebrewNames = ["Dvir", "Tzvi", "Noa", "Ilan", "Amir", "Eran", "Tamar",
-                               "Gal", "Rotem", "Yonatan", "Michal", "Shira", "Yuval",
-                               "Liron", "Nir", "Shai", "Tal", "Tomer", "Vered", "Ziv"]
-            let checker = NSSpellChecker.shared
-            for name in hebrewNames where !checker.hasLearnedWord(name) {
-                checker.learnWord(name)
-            }
+            // NOTE: Do NOT call learnWord() here. learnWord() writes to the system-wide
+            // spell dictionary and pollutes every app on the Mac. Per-session ignored words
+            // (to prevent Hebrew name transliterations from being "corrected") belong in the
+            // Correction Learning Loop feature (P3 in TODOS.md) using a per-document tag.
         }
     }
 

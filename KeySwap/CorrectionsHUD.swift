@@ -36,11 +36,10 @@ final class CorrectionsHUD {
     private var shownAt: Date?
 
     /// Adaptive duration for a given number of corrections.
-    /// DEV: doubled from 3s+0.5s/correction (cap 6s) to 6s+1s/correction (cap 12s)
-    /// while we tune visibility. Revert before ship.
+    /// 3s base + 0.5s per correction, capped at 6s.
     static func duration(for correctionCount: Int) -> TimeInterval {
-        let raw = 6.0 + (1.0 * Double(correctionCount))
-        return min(raw, 12.0)
+        let raw = 3.0 + (0.5 * Double(correctionCount))
+        return min(raw, 6.0)
     }
 
     var isShowing: Bool { panel?.isVisible == true }
