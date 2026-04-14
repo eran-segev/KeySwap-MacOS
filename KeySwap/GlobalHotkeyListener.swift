@@ -2,12 +2,35 @@ import Cocoa
 import CoreGraphics
 import Carbon
 
+// MARK: - SwapMode
+//
+// How the user invoked the swap. Determined from modifier flags on the F9
+// keyDown event. See `swapMode(from:)` for parsing rules and unit tests
+// covering every modifier combination.
+
+enum SwapMode: Equatable {
+    /// Plain F9: full swap + spell check (corrections shown in HUD if any).
+    case forward
+    /// Shift+F9: reverse swap (swap back / opposite direction).
+    case reverse
+    /// Option+F9: swap WITHOUT spell check (pre-commit opt-out).
+    case raw
+    /// Ctrl+F9: revert the last spell-check corrections. Only valid while the
+    /// pendingRevert window is open; otherwise beeps.
+    case revert
+}
+
 // MARK: - GlobalHotkeyListener
 //
-// Installs a system-wide CGEventTap for F9 (keyCode 100) and Shift+F9.
+// Installs a system-wide CGEventTap for F9 (keyCode 100) and the modifier
+// variants Shift+F9, Option+F9, Ctrl+F9.
 //
 // SEC-1 SECURITY GATE: This callback receives ALL keyboard events system-wide.
 // Non-F9 events MUST be returned immediately with zero processing, zero logging.
+// (One exception: KeystrokeBuffer.record() observes character keycodes per
+// SEC-1a for shift-letter recovery, and we clear AppState.pendingRevert on
+// non-F9 keydown events so a user typing more after a correction doesn't have
+// their input clobbered by a stale revert.)
 //
 // Re-entrancy guard: `isSwapping` boolean prevents double-swaps on rapid F9 taps.
 // The swap pipeline owns a 500ms SLA timeout (Design Change 3).
@@ -23,8 +46,9 @@ final class GlobalHotkeyListener {
 
     weak var appState: AppState?
 
-    /// Called when F9 or Shift+F9 is pressed and all guards pass.
-    var onTrigger: (() -> Void)?
+    /// Called when F9 (plain or with Shift/Option/Ctrl modifier) is pressed and
+    /// all guards pass. The `SwapMode` argument tells the pipeline which variant.
+    var onTrigger: ((SwapMode) -> Void)?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -176,22 +200,48 @@ final class GlobalHotkeyListener {
         // See KeystrokeBuffer.swift for security invariants.
         keystrokeBuffer.record(keyCode: keyCode, flags: event.flags)
 
+        // Clear any pendingRevert on a non-F9 keydown — user has typed more after
+        // a correction, so reverting would overwrite their new input. This must
+        // live here, NOT in KeystrokeBuffer, because KeystrokeBuffer's clearing
+        // rules include modifier events (Cmd/Ctrl) — if we piggybacked on that,
+        // Ctrl+F9 itself would clear pendingRevert before the revert path reads it.
+        if keyCode != Self.f9KeyCode {
+            appState?.clearPendingRevert()
+        }
+
         // SECURITY GATE: only F9 proceeds past this point
         guard keyCode == Self.f9KeyCode else {
             return event // pass through immediately
         }
 
-        // Only F9 / Shift+F9 reaches here. Consume the event.
+        // F9 with any modifier combination reaches here. Consume the event.
+        let mode = Self.swapMode(from: event.flags)
         #if DEBUG
-        let flags = event.flags
-        let hasShift = flags.contains(.maskShift)
-        print("[HotkeyListener] F9 detected (shift=\(hasShift)) — invoking handleF9()")
+        print("[HotkeyListener] F9 detected (mode=\(mode)) — invoking handleF9()")
         #endif
-        handleF9()
+        handleF9(mode: mode)
         return nil
     }
 
-    private func handleF9() {
+    /// Pure function: map CGEventFlags on an F9 keydown to a SwapMode.
+    /// Modifier priority: Ctrl beats Option beats Shift. This matters for the
+    /// ambiguous Shift+Option+F9 / Ctrl+Shift+F9 combinations — we pick the
+    /// most "dangerous" modifier (the one closest to the revert/raw intent)
+    /// over the swap-back intent.
+    ///
+    /// Cmd+F9 is intentionally NOT mapped — Cmd+anything is treated as a
+    /// system shortcut (e.g. Cmd+F9 toggles Mac accessibility features in some
+    /// OS versions). Returning .forward here lets the swap happen, but callers
+    /// can choose to ignore it. We bias to "just swap" to avoid surprising
+    /// the user who hit Cmd+F9 by mistake while intending plain F9.
+    static func swapMode(from flags: CGEventFlags) -> SwapMode {
+        if flags.contains(.maskControl) { return .revert }
+        if flags.contains(.maskAlternate) { return .raw }
+        if flags.contains(.maskShift) { return .reverse }
+        return .forward
+    }
+
+    private func handleF9(mode: SwapMode) {
         // Re-entrancy guard
         guard !isSwapping else {
             #if DEBUG
@@ -220,10 +270,10 @@ final class GlobalHotkeyListener {
         }
 
         #if DEBUG
-        print("[HotkeyListener] handleF9 — all guards passed, firing onTrigger (onTrigger set: \(onTrigger != nil))")
+        print("[HotkeyListener] handleF9 — all guards passed, firing onTrigger(mode=\(mode)) (onTrigger set: \(onTrigger != nil))")
         #endif
         isSwapping = true
-        onTrigger?()
+        onTrigger?(mode)
     }
 
     /// Called by the swap pipeline when the operation completes (success or failure).

@@ -183,6 +183,34 @@ final class AccessibilityInteractor {
         return .ok
     }
 
+    // MARK: - Selection range helpers
+
+    /// Reads the current kAXSelectedTextRangeAttribute on `element`.
+    /// Returns nil if the attribute is missing or malformed. Used by the
+    /// revert path to know where a freshly-written correction lives so it
+    /// can be replaced with the pre-correction text.
+    func currentSelectionRange(of element: AXUIElement) -> NSRange? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
+              let axVal = ref else {
+            return nil
+        }
+        var range = CFRange(location: 0, length: 0)
+        guard AXValueGetValue(axVal as! AXValue, .cfRange, &range) else { return nil }
+        return NSRange(location: range.location, length: range.length)
+    }
+
+    /// Sets kAXSelectedTextRangeAttribute on `element` to the given range.
+    /// Used by the revert path to select a freshly-written correction so
+    /// the subsequent write() replaces only that text.
+    @discardableResult
+    func setSelectionRange(_ range: NSRange, on element: AXUIElement) -> Bool {
+        var cfRange = CFRange(location: range.location, length: range.length)
+        guard let value = AXValueCreate(.cfRange, &cfRange) else { return false }
+        let err = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
+        return err == .success
+    }
+
     // MARK: - Writing translated text
 
     enum WriteResult {

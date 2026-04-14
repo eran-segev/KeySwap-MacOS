@@ -1,5 +1,6 @@
 import Foundation
 import ApplicationServices
+import TranslationContext
 
 // MARK: - AppState
 //
@@ -17,6 +18,38 @@ import ApplicationServices
 //   Any → ACTIVE          — both permissions granted and CGEventTap created successfully
 //   ACTIVE → DEGRADED     — CGEventTapIsEnabled() returns false or tap callback stops firing
 //   DEGRADED → ACTIVE     — 30-second retry loop re-enables tap successfully
+//
+// Also owns transient post-swap "pendingRevert" state that makes spell-check
+// corrections visible and reversible. See PendingRevert below.
+
+// MARK: - PendingRevert
+//
+// Ephemeral, in-memory snapshot describing the last swap's spell-check corrections.
+// Exists for a bounded window (HUD display duration) during which the user can
+// press F9 while the corrections HUD is visible to undo the corrections without
+// undoing the layout swap. Ctrl+F9 still works as an explicit alternative.
+//
+// Cleared when:
+//   - The window expires (timer fires)
+//   - A new swap starts (replaces it)
+//   - Any non-F9 keydown is observed by GlobalHotkeyListener (user typed more, revert
+//     would clobber their input)
+//   - Revert is executed (via F9 while HUD open, or Ctrl+F9)
+//
+// `element == nil` indicates the swap used the clipboard-only path (Electron etc.).
+// Revert still works there via synthesized Backspace + paste (see
+// ClipboardManager.replaceLastNCharsWithPaste).
+
+struct PendingRevert {
+    let preCorrectionText: String
+    let correctedText: String
+    let corrections: [Correction]
+    let element: AXUIElement?
+    /// UTF16 offset of the first character of the corrected text within the target
+    /// field, captured at the moment of the AX write. Used to re-select the
+    /// corrected text for replacement during revert.
+    let insertionStartLocation: Int
+}
 
 @MainActor
 final class AppState: ObservableObject {
@@ -35,6 +68,57 @@ final class AppState: ObservableObject {
 
     private var hasAccessibility: Bool = false
     private var hasInputMonitoring: Bool = false
+
+    // MARK: - Pending revert state
+
+    /// The currently-active post-swap correction that can be reverted. Never set
+    /// directly — use `setPendingRevert(_:onExpire:)` or `clearPendingRevert()`.
+    private(set) var pendingRevert: PendingRevert?
+
+    private var revertExpiryTimer: DispatchWorkItem?
+
+    /// Fires when `clearPendingRevert()` is called while a revert was pending.
+    /// Set once by the app at launch — used to keep the corrections HUD in
+    /// sync with revert availability (if there is no revert, the "Press F9
+    /// to revert" hint must come down immediately).
+    /// Does NOT fire on timer-driven expiry — `setPendingRevert`'s `onExpire`
+    /// closure handles that path.
+    var onExplicitClear: (() -> Void)?
+
+    /// Assign a new pendingRevert and schedule its expiry. The previous revert
+    /// (if any) and its timer are cancelled. `onExpire` fires on the main queue
+    /// when the timer elapses naturally; it does NOT fire when the revert is
+    /// cleared explicitly (e.g. by a non-F9 keystroke or executed revert).
+    func setPendingRevert(_ revert: PendingRevert, duration: TimeInterval, onExpire: @escaping () -> Void) {
+        revertExpiryTimer?.cancel()
+        pendingRevert = revert
+
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            // Only fire if still the active revert — a new swap may have
+            // replaced it before the timer fired.
+            guard self.pendingRevert != nil else { return }
+            self.pendingRevert = nil
+            self.revertExpiryTimer = nil
+            onExpire()
+        }
+        revertExpiryTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: timer)
+    }
+
+    /// Clear pendingRevert without firing `onExpire`. Used when the user types
+    /// a non-F9 character, starts a new swap, or executes a revert. Fires
+    /// `onExplicitClear` (if set) ONLY when there was an actual revert to
+    /// clear, so idempotent clears don't re-trigger HUD dismissal.
+    func clearPendingRevert() {
+        revertExpiryTimer?.cancel()
+        revertExpiryTimer = nil
+        let hadPending = pendingRevert != nil
+        pendingRevert = nil
+        if hadPending {
+            onExplicitClear?()
+        }
+    }
 
     // MARK: - Permission tracking
 

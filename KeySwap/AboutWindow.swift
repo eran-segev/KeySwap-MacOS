@@ -5,7 +5,7 @@ import Cocoa
 // Native NSWindow showing:
 //  - App name + version (from Bundle.main.infoDictionary)
 //  - One-sentence description
-//  - Hotkey reminder: F9 / Shift+F9
+//  - Hotkey reminder: F9 / Shift+F9 / Option+F9 (F9 reverts while HUD is up)
 //  - Link to report issues (opens in default browser)
 //
 // Accessible from menu bar → "About KeySwap"
@@ -24,7 +24,7 @@ final class AboutWindow: NSObject, NSWindowDelegate {
 
     private func buildAndShow() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 260),
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 320),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -39,18 +39,18 @@ final class AboutWindow: NSObject, NSWindowDelegate {
     }
 
     private func buildContent() -> NSView {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 260))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 320))
 
         // App name
         let name = field("KeySwap", size: 20, bold: true, alignment: .center)
-        name.frame = NSRect(x: 20, y: 210, width: 320, height: 28)
+        name.frame = NSRect(x: 20, y: 270, width: 340, height: 28)
         container.addSubview(name)
 
         // Version
         let version = versionString()
         let versionField = field(version, size: 12, alignment: .center)
         versionField.textColor = .secondaryLabelColor
-        versionField.frame = NSRect(x: 20, y: 186, width: 320, height: 20)
+        versionField.frame = NSRect(x: 20, y: 246, width: 340, height: 20)
         container.addSubview(versionField)
 
         // Description
@@ -59,29 +59,48 @@ final class AboutWindow: NSObject, NSWindowDelegate {
             size: 13,
             alignment: .center
         )
-        desc.frame = NSRect(x: 20, y: 150, width: 320, height: 30)
+        desc.frame = NSRect(x: 20, y: 214, width: 340, height: 20)
         container.addSubview(desc)
 
-        // Hotkey reminder
-        let hotkey = field(
-            "Press F9 to swap.  Press Shift+F9 to swap back.",
+        // Hotkey reminder — primary
+        let hotkeyPrimary = field(
+            "F9 — Swap     Shift+F9 — Swap back",
             size: 12,
             alignment: .center
         )
-        hotkey.textColor = .secondaryLabelColor
-        hotkey.frame = NSRect(x: 20, y: 110, width: 320, height: 30)
-        container.addSubview(hotkey)
+        hotkeyPrimary.textColor = .secondaryLabelColor
+        hotkeyPrimary.frame = NSRect(x: 20, y: 184, width: 340, height: 18)
+        container.addSubview(hotkeyPrimary)
+
+        // Hotkey reminder — modifiers
+        let hotkeyModifiers = field(
+            "Option+F9 — Swap without autocorrect",
+            size: 12,
+            alignment: .center
+        )
+        hotkeyModifiers.textColor = .secondaryLabelColor
+        hotkeyModifiers.frame = NSRect(x: 20, y: 162, width: 340, height: 18)
+        container.addSubview(hotkeyModifiers)
+
+        let hotkeyRevert = field(
+            "Press F9 while the corrections popup is open to revert",
+            size: 12,
+            alignment: .center
+        )
+        hotkeyRevert.textColor = .secondaryLabelColor
+        hotkeyRevert.frame = NSRect(x: 20, y: 140, width: 340, height: 18)
+        container.addSubview(hotkeyRevert)
 
         // Issue link button
         let linkBtn = NSButton(title: "Report an Issue", target: self, action: #selector(openIssueLink))
         linkBtn.bezelStyle = .recessed
-        linkBtn.frame = NSRect(x: 110, y: 60, width: 140, height: 24)
+        linkBtn.frame = NSRect(x: 120, y: 80, width: 140, height: 24)
         container.addSubview(linkBtn)
 
         // Copyright
         let copyright = field("© \(currentYear()) — All rights reserved", size: 11, alignment: .center)
         copyright.textColor = .tertiaryLabelColor
-        copyright.frame = NSRect(x: 20, y: 24, width: 320, height: 20)
+        copyright.frame = NSRect(x: 20, y: 30, width: 340, height: 20)
         container.addSubview(copyright)
 
         return container

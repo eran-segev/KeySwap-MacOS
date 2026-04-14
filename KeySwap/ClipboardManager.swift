@@ -95,6 +95,79 @@ final class ClipboardManager {
         }
     }
 
+    // MARK: - Clipboard-only revert
+    //
+    // For apps that took the clipboard-only write path, the AX interactor
+    // has no element to rewrite into. But we know two facts:
+    //   1. Immediately after the swap, the freshly-pasted corrected text sits
+    //      directly before the caret (Cmd+V leaves the cursor at the end of
+    //      the pasted content).
+    //   2. We know its length.
+    // So: Backspace those N chars away, then paste the pre-correction text.
+    // Same trust assumptions as the swap's Cmd+V injection.
+
+    /// Delete the last `charCount` characters before the caret (Backspace
+    /// repeated), then paste `replacement`. Completion fires after the paste
+    /// has landed and the clipboard has been restored.
+    ///
+    /// Why Backspace instead of Shift+Left+Paste: Shift+Left in a tight loop
+    /// doesn't reliably extend selection in third-party apps — events get
+    /// coalesced or the selection state resets between events. Backspace is
+    /// edit-path rather than selection-path, same idempotent behavior
+    /// everywhere, works in every text context that accepts typed input.
+    /// We use the same event tap as Cmd+V (`.cgAnnotatedSessionEventTap`),
+    /// which we know is functional in this app.
+    func replaceLastNCharsWithPaste(
+        charCount: Int,
+        replacement: String,
+        onComplete: @escaping (_ success: Bool) -> Void
+    ) {
+        guard charCount > 0 else { onComplete(false); return }
+
+        let snapshot = stashClipboard()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(replacement, forType: .string)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in
+            guard let self else { return }
+            // Chain Backspace events with 8ms gaps so the target app can
+            // process each deletion before the next one arrives.
+            self.sendBackspaceChain(remaining: charCount) { [weak self] in
+                guard let self else { return }
+                // Small extra pause so the final deletion settles before paste.
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) { [weak self] in
+                    guard let self else { return }
+                    self.sendCmdV()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+                        guard let self else { return }
+                        self.restoreAndZero(snapshot)
+                        onComplete(true)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sendBackspaceChain(remaining: Int, completion: @escaping () -> Void) {
+        guard remaining > 0 else { completion(); return }
+        sendOneBackspace()
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(8)) { [weak self] in
+            self?.sendBackspaceChain(remaining: remaining - 1, completion: completion)
+        }
+    }
+
+    private func sendOneBackspace() {
+        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+        let backspace: CGKeyCode = 51 // kVK_Delete
+        guard let down = CGEvent(keyboardEventSource: src, virtualKey: backspace, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: backspace, keyDown: false) else {
+            return
+        }
+        down.post(tap: .cgAnnotatedSessionEventTap)
+        up.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
     // MARK: - Stash
 
     private func stashClipboard() -> ClipboardSnapshot {

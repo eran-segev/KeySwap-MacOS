@@ -17,6 +17,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
     private let layoutSwitcher = LayoutSwitcher()
     private let translationEngine = TranslationContext()
     private let spellCheckFilter = SpellCheckFilter()
+    private let correctionsHUD = CorrectionsHUD()
 
     private lazy var permissionsRouter = PermissionsRouter(appState: appState)
     private lazy var aboutWindow = AboutWindow()
@@ -30,6 +31,23 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
 
     private var slaTimeoutItem: DispatchWorkItem?
 
+    // MARK: - Active correction badge state (design layer 2)
+    //
+    // When a correction HUD is showing, the menubar icon switches to a
+    // "badged" glyph and the menu gains a "Last correction" item. This gives
+    // the user a persistent secondary anchor if they missed the transient HUD.
+    // The badge outlives the HUD by 3s (see `badgeGracePeriodSeconds`) so a
+    // user who glances up a second late still sees the menubar state.
+    private var hasActiveCorrectionBadge = false
+    private var badgeClearTimer: DispatchWorkItem?
+    private let badgeGracePeriodSeconds: TimeInterval = 3.0
+    private var lastCorrectionSummary: String?
+
+    // Menu items populated dynamically. Tag-based lookup avoids stale pointers
+    // if buildMenu() ever rebuilds (it currently doesn't, but defending anyway).
+    private static let lastCorrectionItemTag = 2
+    private static let revertCorrectionItemTag = 3
+
     // MARK: - NSApplicationMain entry
 
     static func main() {
@@ -42,6 +60,15 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
     // MARK: - applicationDidFinishLaunching
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Log the running build identity. Printed unconditionally (not DEBUG-gated)
+        // so release builds also surface this — makes it trivial to confirm which
+        // version is running via Console.app or Xcode's console.
+        let info = Bundle.main.infoDictionary
+        let ver = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let bundlePath = Bundle.main.bundlePath
+        print("[KeySwap] Launching v\(ver) (build \(build)) from \(bundlePath)")
+
         // Register as a login item immediately (best-effort; failure is non-fatal for MVP)
         if #available(macOS 13.0, *) {
             try? SMAppService.mainApp.register()
@@ -51,6 +78,19 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         setupHotkeyListener()
         checkInitialPermissions()
         warmUpSpellChecker()
+
+        // Keep the corrections HUD in sync with revert availability. When
+        // the user types after a correction, AppState clears pendingRevert;
+        // if the HUD is still showing, its "Press F9 to revert" hint would
+        // lie (F9 would start a new swap instead). Dismiss the HUD in
+        // lockstep so the hint stays honest.
+        appState.onExplicitClear = { [weak self] in
+            guard let self else { return }
+            self.correctionsHUD.dismiss(reason: "pending-revert-cleared")
+            // Start the grace-period timer for the menubar badge so users
+            // who glance up late still see that a correction happened.
+            self.scheduleCorrectionBadgeClear(after: self.badgeGracePeriodSeconds)
+        }
     }
 
     // MARK: - Spell checker warm-up
@@ -61,16 +101,10 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         // Warm it up on a background queue at launch so the first real swap is fast.
         DispatchQueue.global(qos: .utility).async {
             _ = NSSpellChecker.shared.checkSpelling(of: "warmup", startingAt: 0)
-
-            // Pre-learn common Hebrew transliterations that NSSpellChecker would
-            // otherwise silently "correct" (Dvir→Diver, Tzvi→TV, etc.).
-            let hebrewNames = ["Dvir", "Tzvi", "Noa", "Ilan", "Amir", "Eran", "Tamar",
-                               "Gal", "Rotem", "Yonatan", "Michal", "Shira", "Yuval",
-                               "Liron", "Nir", "Shai", "Tal", "Tomer", "Vered", "Ziv"]
-            let checker = NSSpellChecker.shared
-            for name in hebrewNames where !checker.hasLearnedWord(name) {
-                checker.learnWord(name)
-            }
+            // NOTE: Do NOT call learnWord() here. learnWord() writes to the system-wide
+            // spell dictionary and pollutes every app on the Mac. Per-session ignored words
+            // (to prevent Hebrew name transliterations from being "corrected") belong in the
+            // Correction Learning Loop feature (P3 in TODOS.md) using a per-document tag.
         }
     }
 
@@ -91,6 +125,30 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         stateLabel.tag = 1 // used to update later
         menu.addItem(stateLabel)
 
+        // Version label (disabled, directly below state — so the running build
+        // version is visible at a glance without opening About).
+        let info = Bundle.main.infoDictionary
+        let ver = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        let versionLabel = NSMenuItem(title: "v\(ver) (build \(build))", action: nil, keyEquivalent: "")
+        versionLabel.isEnabled = false
+        menu.addItem(versionLabel)
+
+        menu.addItem(.separator())
+
+        // Last correction section. Populated after every swap that applied
+        // spell-check corrections. Disabled until the first correction fires.
+        let lastCorrection = NSMenuItem(title: "Last correction: none yet", action: nil, keyEquivalent: "")
+        lastCorrection.isEnabled = false
+        lastCorrection.tag = Self.lastCorrectionItemTag
+        menu.addItem(lastCorrection)
+
+        let revertItem = NSMenuItem(title: "Revert last correction (F9 while open)", action: #selector(revertLastCorrectionFromMenu), keyEquivalent: "")
+        revertItem.target = self
+        revertItem.isEnabled = false
+        revertItem.tag = Self.revertCorrectionItemTag
+        menu.addItem(revertItem)
+
         menu.addItem(.separator())
 
         menu.addItem(NSMenuItem(title: "About KeySwap", action: #selector(showAbout), keyEquivalent: ""))
@@ -104,11 +162,19 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
 
         let state = appState.current
+        // Icon priority: degraded > active-correction-badge > default.
+        // Degraded wins because a broken tap is a bigger deal than an unseen
+        // correction receipt. An active correction tints the accent color so
+        // it reads as a positive state ("something to look at"), not a warning.
         if state == .degraded {
-            // Warning icon for DEGRADED
             button.image = NSImage(systemSymbolName: "keyboard.badge.exclamationmark", accessibilityDescription: "KeySwap degraded")
+            button.contentTintColor = nil
+        } else if hasActiveCorrectionBadge {
+            button.image = NSImage(systemSymbolName: "keyboard.badge.ellipsis", accessibilityDescription: "KeySwap — correction available")
+            button.contentTintColor = .controlAccentColor
         } else {
             button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "KeySwap")
+            button.contentTintColor = nil
         }
 
         // Update state label in menu
@@ -126,6 +192,78 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Correction badge lifecycle (design layer 2)
+
+    /// Turn on the menubar correction badge and populate the "Last correction"
+    /// menu item. Called at the same moment the HUD is shown.
+    @MainActor
+    private func activateCorrectionBadge(corrections: [Correction]) {
+        // A new correction invalidates any in-flight grace-period clear timer.
+        badgeClearTimer?.cancel()
+        badgeClearTimer = nil
+
+        hasActiveCorrectionBadge = true
+
+        // Summary text: first correction, plus "+N more" if we trimmed.
+        let head = corrections.first.map { "\($0.originalWord) → \($0.replacementWord)" } ?? "—"
+        let summary: String
+        if corrections.count > 1 {
+            summary = "\(head) (+\(corrections.count - 1) more)"
+        } else {
+            summary = head
+        }
+        lastCorrectionSummary = summary
+
+        if let item = statusMenu?.item(withTag: Self.lastCorrectionItemTag) {
+            item.title = "Last correction: \(summary)"
+        }
+        if let item = statusMenu?.item(withTag: Self.revertCorrectionItemTag) {
+            item.isEnabled = true
+        }
+
+        updateMenuBarIcon()
+        #if DEBUG
+        print("[KeySwap] correction badge activated: \(summary)")
+        #endif
+    }
+
+    /// Schedule badge removal after the grace period. Called when the HUD
+    /// naturally expires — we keep the badge lit a bit longer so users who
+    /// glance up late still see the state.
+    @MainActor
+    private func scheduleCorrectionBadgeClear(after delay: TimeInterval) {
+        badgeClearTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.clearCorrectionBadge(reason: "grace-period-elapsed")
+        }
+        badgeClearTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Immediately turn off the badge. Called when the user executed the
+    /// revert (they handled it, no need to keep nagging them) or a new swap
+    /// without corrections started.
+    @MainActor
+    private func clearCorrectionBadge(reason: String) {
+        badgeClearTimer?.cancel()
+        badgeClearTimer = nil
+        guard hasActiveCorrectionBadge else { return }
+        hasActiveCorrectionBadge = false
+        // Leave the "Last correction: ..." label in place so the user can
+        // still see what changed if they open the menu later. Only disable
+        // the Revert action because the revert window has passed.
+        if let item = statusMenu?.item(withTag: Self.revertCorrectionItemTag) {
+            item.isEnabled = false
+        }
+        updateMenuBarIcon()
+        print("[KeySwap] correction badge cleared (reason=\(reason))")
+    }
+
+    @objc private func revertLastCorrectionFromMenu() {
+        // Route through the same path as Ctrl+F9 so behavior stays identical.
+        handleHotkey(mode: .revert)
+    }
+
     private func menuTitle() -> String {
         switch appState.current {
         case .active: return "KeySwap — Active"
@@ -138,13 +276,20 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
     // MARK: - Visual success flash (Design Doc: green icon for 0.5s)
 
     private func flashSuccess() {
+        // Skip the green flash when a correction badge is active — the badge
+        // IS the success signal, and a green flash would stomp it for 500ms
+        // right when the user is glancing up. For clean swaps (no corrections)
+        // the green tint remains the only feedback that F9 did something.
+        guard !hasActiveCorrectionBadge else { return }
         guard let button = statusItem?.button else { return }
         button.image = NSImage(systemSymbolName: "keyboard.fill", accessibilityDescription: "KeySwap — swapped")
         button.contentTintColor = .systemGreen
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak button] in
-            button?.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "KeySwap")
-            button?.contentTintColor = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            // Restore through updateMenuBarIcon so we respect any state change
+            // that happened during the flash window (e.g. AppState went
+            // degraded, or a correction badge arrived).
+            self?.updateMenuBarIcon()
         }
     }
 
@@ -152,8 +297,34 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
 
     private func setupHotkeyListener() {
         hotkeyListener.appState = appState
-        hotkeyListener.onTrigger = { [weak self] in
-            self?.runSwapPipeline()
+        hotkeyListener.onTrigger = { [weak self] mode in
+            self?.handleHotkey(mode: mode)
+        }
+    }
+
+    /// Routes the hotkey to either the swap pipeline or the revert path.
+    ///
+    /// Special case: when the corrections HUD is open AND a pending revert is
+    /// available, plain F9 (forward mode) acts as REVERT instead of starting a
+    /// new swap. This is friendlier than the dedicated Ctrl+F9 — the user
+    /// doesn't have to learn a modifier or reach for it. Ctrl+F9 still works
+    /// as an explicit revert for users who prefer the deterministic path.
+    /// Shift+F9 (reverse) and Option+F9 (raw) always run a new swap, so users
+    /// can opt out of the F9-reverts behavior by adding any modifier.
+    @MainActor
+    private func handleHotkey(mode: SwapMode) {
+        if mode == .forward, correctionsHUD.isShowing, appState.pendingRevert != nil {
+            print("[KeySwap] F9 while HUD open — routing to revert")
+            runRevertPipeline()
+            return
+        }
+        switch mode {
+        case .forward, .reverse:
+            runSwapPipeline(skipSpellCheck: false)
+        case .raw:
+            runSwapPipeline(skipSpellCheck: true)
+        case .revert:
+            runRevertPipeline()
         }
     }
 
@@ -223,7 +394,17 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
 
     // MARK: - Swap pipeline
 
-    private func runSwapPipeline() {
+    private func runSwapPipeline(skipSpellCheck: Bool) {
+        // Starting a new swap invalidates any outstanding revert window.
+        // Dismiss the HUD and clear pendingRevert before doing anything else.
+        correctionsHUD.dismiss(reason: "new-swap-started")
+        appState.clearPendingRevert()
+        // Cancel any pending badge clear — if this swap also has corrections,
+        // activateCorrectionBadge() will set the badge fresh. If it doesn't,
+        // the badge stays lit through this swap and its grace period continues.
+        badgeClearTimer?.cancel()
+        badgeClearTimer = nil
+
         // SLA timeout: 500ms total (Design Change 3)
         let sla = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -324,18 +505,47 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             }
             translated = String(chars)
         }
-        // 3c. Post-swap spell check: silently correct English typos that survived the
+        // 3c. Post-swap spell check: corrects English typos that survived the
         // layout swap (e.g., "teh" → "the"). Runs AFTER the Shift-index pass so
-        // intentional capitalizations are already recovered before spell check sees them.
-        if targetLanguage == .english {
-            translated = spellCheckFilter.postProcess(translated, language: .english, provider: NSSpellCheckerProvider())
+        // intentional capitalizations are already recovered before spell check
+        // sees them. Corrections are now TRACKED and made visible to the user
+        // via the CorrectionsHUD, with Ctrl+F9 as an escape hatch.
+        // If `skipSpellCheck` is true (Option+F9 raw path), correction is skipped
+        // entirely — the user gets the raw swap with no modifications.
+        let preCorrectionText = translated
+        var appliedCorrections: [Correction] = []
+        if targetLanguage == .english && !skipSpellCheck {
+            let spellResult = spellCheckFilter.postProcess(translated, language: .english, provider: NSSpellCheckerProvider())
+            translated = spellResult.corrected
+            appliedCorrections = spellResult.corrections
         }
+
+        #if DEBUG
+        if targetLanguage == .english && !skipSpellCheck {
+            if appliedCorrections.isEmpty {
+                print("[SpellCheck] No misspellings found in swapped text: \"\(translated.prefix(80))\"")
+            } else {
+                let pairs = appliedCorrections.map { "\($0.originalWord)→\($0.replacementWord)" }.joined(separator: ", ")
+                print("[SpellCheck] Found \(appliedCorrections.count) correction(s): \(pairs)")
+            }
+        } else if skipSpellCheck {
+            print("[SpellCheck] Skipped (Option+F9 raw swap)")
+        } else {
+            print("[SpellCheck] Skipped (target=\(targetLanguage), spell check runs on English target only)")
+        }
+        #endif
         #if DEBUG
         print("[SwapPipeline] Step 3: direction=\(direction), target=\(targetLanguage), translated=\"\(translated.prefix(50))\"")
         #endif
 
         // 4. Write translated text back
         if let el = axElement {
+            // Capture the insertion start location BEFORE the write so the revert
+            // path knows which UTF16 range to re-select later. The write path
+            // replaces whatever is currently selected; start == current selection
+            // location (collapsed or otherwise).
+            let insertionStart = axInteractor.currentSelectionRange(of: el)?.location ?? 0
+
             // AX path: try direct write, fall back to clipboard
             let axResult = axInteractor.write(translated, to: el)
             #if DEBUG
@@ -345,6 +555,13 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             switch axResult {
             case .success:
                 layoutSwitcher.switchLayout(to: direction)
+                recordPendingRevertAndShowHUD(
+                    preCorrectionText: preCorrectionText,
+                    correctedText: translated,
+                    corrections: appliedCorrections,
+                    element: el,
+                    insertionStart: insertionStart
+                )
                 completePipeline(success: true)
 
             case .needsClipboardFallback:
@@ -356,6 +573,16 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     if pasted {
                         self.layoutSwitcher.switchLayout(to: direction)
+                        // Clipboard fallback on AX-available apps: still show HUD
+                        // (user deserves to see corrections) but revert will use
+                        // the AX element if it still accepts writes.
+                        self.recordPendingRevertAndShowHUD(
+                            preCorrectionText: preCorrectionText,
+                            correctedText: translated,
+                            corrections: appliedCorrections,
+                            element: el,
+                            insertionStart: insertionStart
+                        )
                         self.completePipeline(success: true)
                     } else {
                         self.completePipeline(success: false)
@@ -363,17 +590,142 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
                 }
             }
         } else {
-            // Clipboard-only path (Electron apps): write via Cmd+V, skip AX verification
+            // Clipboard-only path (Electron apps): write via Cmd+V, skip AX verification.
+            // Revert is NOT supported on this path — no AX element to rewrite into.
+            // We still show the HUD so the user sees what was corrected (awareness),
+            // but Ctrl+F9 will beep because pendingRevert.element is nil.
             #if DEBUG
-            print("[SwapPipeline] Step 4: clipboard-only write path")
+            print("[SwapPipeline] Step 4: clipboard-only write path (revert unavailable)")
             #endif
             clipboardManager.pasteWithoutAXVerification(
                 translatedText: translated
             ) { [weak self] in
                 guard let self else { return }
                 self.layoutSwitcher.switchLayout(to: direction)
+                self.recordPendingRevertAndShowHUD(
+                    preCorrectionText: preCorrectionText,
+                    correctedText: translated,
+                    corrections: appliedCorrections,
+                    element: nil,
+                    insertionStart: 0
+                )
                 self.completePipeline(success: true)
             }
+        }
+    }
+
+    /// Stashes pendingRevert state and shows the corrections HUD if any
+    /// corrections were applied. No-op when corrections is empty.
+    @MainActor
+    private func recordPendingRevertAndShowHUD(
+        preCorrectionText: String,
+        correctedText: String,
+        corrections: [Correction],
+        element: AXUIElement?,
+        insertionStart: Int
+    ) {
+        guard !corrections.isEmpty else { return }
+
+        let revert = PendingRevert(
+            preCorrectionText: preCorrectionText,
+            correctedText: correctedText,
+            corrections: corrections,
+            element: element,
+            insertionStartLocation: insertionStart
+        )
+        let duration = CorrectionsHUD.duration(for: corrections.count)
+        appState.setPendingRevert(revert, duration: duration) { [weak self] in
+            // Timer-driven expiry: dismiss HUD in lockstep, then keep the
+            // menubar badge lit for the grace period so late-glancers still
+            // see it. Explicit clears (Ctrl+F9, new swap, non-F9 keystroke)
+            // handle the HUD themselves so this closure never double-dismisses.
+            guard let self else { return }
+            self.correctionsHUD.dismiss(reason: "revert-window-expired")
+            self.scheduleCorrectionBadgeClear(after: self.badgeGracePeriodSeconds)
+        }
+        correctionsHUD.show(corrections: corrections, caretElement: element)
+        activateCorrectionBadge(corrections: corrections)
+    }
+
+    /// Ctrl+F9 revert path. Rewrites pre-correction text over the corrected
+    /// text using the stored AX element and insertion start. If no pending
+    /// revert exists or it's a clipboard-only swap, beeps and cleans up.
+    @MainActor
+    private func runRevertPipeline() {
+        guard let pending = appState.pendingRevert else {
+            #if DEBUG
+            print("[RevertPipeline] No pendingRevert — beep")
+            #endif
+            NSSound.beep()
+            hotkeyListener.swapCompleted()
+            return
+        }
+
+        defer {
+            appState.clearPendingRevert()
+            correctionsHUD.dismiss(reason: "revert-executed")
+            clearCorrectionBadge(reason: "revert-executed")
+        }
+
+        guard let el = pending.element else {
+            // Clipboard-only swap: no AX element to rewrite. Fall back to
+            // synthesized Shift+Left + paste. This works everywhere the
+            // original swap worked (same trust assumptions).
+            // Use Character count (grapheme clusters), not NSString.length
+            // (UTF16 code units). macOS Backspace deletes one grapheme cluster
+            // per press — a single emoji is 2 UTF16 units but 1 Backspace.
+            let charCount = pending.correctedText.count
+            guard charCount > 0 else {
+                // Defensive: corrected text is empty — nothing to backspace over.
+                NSSound.beep()
+                hotkeyListener.swapCompleted()
+                return
+            }
+            print("[RevertPipeline] clipboard-only revert: backspacing \(charCount) chars and pasting pre-correction text")
+            clipboardManager.replaceLastNCharsWithPaste(
+                charCount: charCount,
+                replacement: pending.preCorrectionText
+            ) { [weak self] success in
+                guard let self else { return }
+                if success {
+                    self.flashSuccess()
+                } else {
+                    NSSound.beep()
+                }
+                self.hotkeyListener.swapCompleted()
+            }
+            return
+        }
+
+        // Re-select the freshly-written corrected text so the subsequent
+        // write() replaces exactly that range and nothing else.
+        let selectRange = NSRange(
+            location: pending.insertionStartLocation,
+            length: (pending.correctedText as NSString).length
+        )
+        let selected = axInteractor.setSelectionRange(selectRange, on: el)
+        #if DEBUG
+        print("[RevertPipeline] setSelectionRange(\(selectRange)) → \(selected)")
+        #endif
+
+        let axResult = axInteractor.write(pending.preCorrectionText, to: el)
+        switch axResult {
+        case .success:
+            #if DEBUG
+            print("[RevertPipeline] AX write succeeded — revert complete")
+            #endif
+            flashSuccess()
+            hotkeyListener.swapCompleted()
+
+        case .needsClipboardFallback:
+            // The AX element rejected the revert write. We do NOT try clipboard
+            // fallback for revert — it would require another Cmd+V and further
+            // mutate the user's state. Beep, leave corrected text in place.
+            #if DEBUG
+            print("[RevertPipeline] AX write needs clipboard fallback — beep, leaving corrected text")
+            #endif
+            NSSound.beep()
+            hotkeyListener.swapCompleted()
         }
     }
 
