@@ -21,10 +21,19 @@ final class AccessibilityInteractor {
     /// use Cmd+V to paste.
     enum ReadResult {
         case ax(text: String, element: AXUIElement, fallbackMacroUsed: Bool)
-        case clipboardOnly(text: String)
+        case clipboardOnly(text: String, fallbackMacroUsed: Bool)
     }
 
     func readSelectedText() -> ReadResult? {
+        // Tracks whether any destructive selection macro (Cmd+Shift+Left /
+        // whole-line) has fired across the whole read operation — not just
+        // within the clipboard path. If we eventually return via
+        // .clipboardOnly, we need this flag to stay accurate so the pipeline
+        // knows whether to flip paragraph writing direction: running line
+        // macros in the AX branch then Cmd+C'ing the result in the clipboard
+        // branch must still report fallback=true.
+        var axMacrosFired = false
+
         if let element = focusedElement() {
             #if DEBUG
             var roleRef: CFTypeRef?
@@ -41,17 +50,58 @@ final class AccessibilityInteractor {
                 return .ax(text: text, element: element, fallbackMacroUsed: false)
             }
 
-            #if DEBUG
-            print("[AXInteractor] readSelectedText: no selection, trying Cmd+Shift+Left fallback...")
-            #endif
+            // Gate macro decisions on what AX says the element supports.
+            // nil range = attribute absent (container like AXSplitGroup; Word's
+            //            focused element is typically a split group, not the
+            //            text area itself). Running line macros on AX here
+            //            would still fire globally and destroy any visual
+            //            selection the user made. Skip AX macros and let the
+            //            clipboard path handle it — it already tries Cmd+C on
+            //            the existing visual selection before running macros.
+            // length > 0 = user has a selection that AX can't expose as a
+            //              string (Microsoft Word's AXTextArea pattern on
+            //              some versions). Cmd+C the existing selection.
+            // length == 0 = text-capable element with caret but no selection.
+            //               Line macros are appropriate here — the element
+            //               will expose the resulting selection.
+            let rangeOpt = currentSelectionRange(of: element)
 
-            // Fallback: select the whole line via Cmd+Shift+Left, then retry
-            selectCurrentLine()
-            if let text = selectedText(from: element), !text.isEmpty {
+            if let range = rangeOpt, range.length > 0 {
+                if let text = copyExistingSelectionToClipboard(), !text.isEmpty {
+                    return .ax(text: text, element: element, fallbackMacroUsed: false)
+                }
+            }
+
+            if rangeOpt != nil {
                 #if DEBUG
-                print("[AXInteractor] readSelectedText: fallback got \(text.count) chars")
+                print("[AXInteractor] readSelectedText: no selection, trying Cmd+Shift+Left fallback...")
                 #endif
-                return .ax(text: text, element: element, fallbackMacroUsed: true)
+
+                // Fallback macro #1: Cmd+Shift+Left (extend selection from caret to
+                // logical line start). Works when caret is mid-line.
+                selectCurrentLine()
+                axMacrosFired = true
+                if let text = selectedText(from: element), !text.isEmpty {
+                    #if DEBUG
+                    print("[AXInteractor] readSelectedText: Cmd+Shift+Left fallback got \(text.count) chars")
+                    #endif
+                    return .ax(text: text, element: element, fallbackMacroUsed: true)
+                }
+
+                // Fallback macro #2: Cmd+Left then Cmd+Shift+Right (caret to line
+                // start, then extend to line end). Always selects the whole line
+                // regardless of starting caret position — fixes the "caret at line
+                // start" no-op failure of macro #1.
+                #if DEBUG
+                print("[AXInteractor] readSelectedText: macro #1 empty, trying whole-line macro...")
+                #endif
+                selectWholeLine()
+                if let text = selectedText(from: element), !text.isEmpty {
+                    #if DEBUG
+                    print("[AXInteractor] readSelectedText: whole-line fallback got \(text.count) chars")
+                    #endif
+                    return .ax(text: text, element: element, fallbackMacroUsed: true)
+                }
             }
         }
 
@@ -60,11 +110,12 @@ final class AccessibilityInteractor {
         #if DEBUG
         print("[AXInteractor] readSelectedText: AX failed, trying Cmd+C clipboard path...")
         #endif
-        if let text = readSelectionViaClipboard(), !text.isEmpty {
+        if let result = readSelectionViaClipboard(), !result.text.isEmpty {
+            let effectiveFallback = result.fallbackMacroUsed || axMacrosFired
             #if DEBUG
-            print("[AXInteractor] readSelectedText: clipboard path got \(text.count) chars")
+            print("[AXInteractor] readSelectedText: clipboard path got \(result.text.count) chars (fallback=\(effectiveFallback))")
             #endif
-            return .clipboardOnly(text: text)
+            return .clipboardOnly(text: result.text, fallbackMacroUsed: effectiveFallback)
         }
 
         #if DEBUG
@@ -77,25 +128,54 @@ final class AccessibilityInteractor {
 
     /// Sends Cmd+C, reads the clipboard, then restores the previous clipboard contents.
     /// If nothing is selected, tries Cmd+Shift+Left first to select the current line.
-    private func readSelectionViaClipboard() -> String? {
+    /// Returns the text and whether the line-selection fallback was used (so the
+    /// caller can decide whether to flip paragraph writing direction post-swap).
+    private func readSelectionViaClipboard() -> (text: String, fallbackMacroUsed: Bool)? {
         let pasteboard = NSPasteboard.general
         let stashedItems = stashClipboard()
 
         // First attempt: Cmd+C on whatever is already selected
         var text = copyViaClipboard(pasteboard: pasteboard)
+        var fallbackUsed = false
 
         if text == nil {
-            // Nothing was selected — select the current line, then retry
+            // Macro #1: Cmd+Shift+Left (cursor to line start). Works when
+            // caret is mid-line; no-op when caret is at line start.
             #if DEBUG
             print("[AXInteractor] clipboard path: no selection, sending Cmd+Shift+Left then Cmd+C")
             #endif
             selectCurrentLine()
+            fallbackUsed = true
+            text = copyViaClipboard(pasteboard: pasteboard)
+        }
+
+        if text == nil {
+            // Macro #2: Cmd+Left then Cmd+Shift+Right (whole line, start→end).
+            // Selects the whole line regardless of caret position.
+            #if DEBUG
+            print("[AXInteractor] clipboard path: macro #1 empty, sending whole-line macro then Cmd+C")
+            #endif
+            selectWholeLine()
             text = copyViaClipboard(pasteboard: pasteboard)
         }
 
         // Restore clipboard
         restoreClipboard(stashedItems)
 
+        guard let t = text else { return nil }
+        return (t, fallbackUsed)
+    }
+
+    /// Cmd+C the user's existing visual selection (no fallback macros).
+    /// Stashes and restores the clipboard so user data isn't clobbered.
+    /// Used when AX reports a non-zero selection range but `kAXSelectedTextAttribute`
+    /// returns nil/empty (the Microsoft Word pattern) — we need the user's actual
+    /// selected text without running macros that would overwrite their selection.
+    private func copyExistingSelectionToClipboard() -> String? {
+        let pasteboard = NSPasteboard.general
+        let stashedItems = stashClipboard()
+        let text = copyViaClipboard(pasteboard: pasteboard)
+        restoreClipboard(stashedItems)
         return text
     }
 
@@ -256,15 +336,25 @@ final class AccessibilityInteractor {
             #endif
         }
 
-        // Fallback: write to full value attribute.
-        let valErr = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        // Fallback: write to full value attribute — must replace only the selected range,
+        // not the entire field content (which would wipe surrounding email/document text).
+        // Requires a valid selection range and a readable full value to reconstruct safely.
+        guard selRange.length > 0,
+              let fullText = currentValue(of: element),
+              let swiftRange = Range(NSRange(location: selRange.location, length: selRange.length), in: fullText) else {
+            // Can't safely reconstruct — selection range missing or full value unreadable.
+            return .needsClipboardFallback
+        }
+        let modified = fullText.replacingCharacters(in: swiftRange, with: text)
+        let valErr = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, modified as CFString)
         #if DEBUG
-        print("[AXInteractor] write via kAXValueAttribute → \(valErr.rawValue)")
+        print("[AXInteractor] write via kAXValueAttribute (range-splice) → \(valErr.rawValue)")
         #endif
         switch valErr {
         case .success:
-            // Reposition cursor to end of text.
-            var range = CFRange(location: text.utf16.count, length: 0)
+            // Reposition cursor to end of inserted text.
+            let newLocation = selRange.location + text.utf16.count
+            var range = CFRange(location: newLocation, length: 0)
             if let value = AXValueCreate(.cfRange, &range) {
                 AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
             }
@@ -347,22 +437,62 @@ final class AccessibilityInteractor {
         return str
     }
 
-    /// Sends Cmd+Shift+Left to select the current line.
+    /// Sends Cmd+Shift+Left to extend the selection from the caret to the
+    /// logical line start. No-op when the caret is already at line start
+    /// (user just pressed Enter, cursor at top of paragraph, etc.) — see
+    /// `selectWholeLine()` for the fallback that handles that case.
     private func selectCurrentLine() {
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         let flags: CGEventFlags = [.maskCommand, .maskShift]
 
-        // Key down
-        let down = CGEvent(keyboardEventSource: src, virtualKey: 0x7B, keyDown: true) // Left arrow = 0x7B
+        let down = CGEvent(keyboardEventSource: src, virtualKey: 0x7B, keyDown: true) // Left arrow
         down?.flags = flags
         down?.post(tap: .cgAnnotatedSessionEventTap)
 
-        // Key up
         let up = CGEvent(keyboardEventSource: src, virtualKey: 0x7B, keyDown: false)
         up?.flags = flags
         up?.post(tap: .cgAnnotatedSessionEventTap)
 
-        // Small delay to let the selection land before we read it
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+
+    /// Sends Cmd+Left then Cmd+Shift+Right to select the whole current line
+    /// from logical start to logical end, regardless of starting caret
+    /// position. Called as fallback when `selectCurrentLine()` yielded an
+    /// empty selection (caret was already at line start).
+    ///
+    /// BIDI-safe: macOS Cmd+Left/Cmd+Right use LOGICAL direction, not visual.
+    /// In a right-to-left paragraph (Hebrew, Arabic), Cmd+Left still moves
+    /// the caret to the logical line start (visually the right edge) and
+    /// Cmd+Shift+Right extends selection to the logical line end (visually
+    /// the left edge). Same whole-line selection in both directions.
+    private func selectWholeLine() {
+        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+        let leftKey: CGKeyCode = 0x7B
+        let rightKey: CGKeyCode = 0x7C
+
+        // Step 1: Cmd+Left — caret to line start (logical).
+        let leftDown = CGEvent(keyboardEventSource: src, virtualKey: leftKey, keyDown: true)
+        leftDown?.flags = .maskCommand
+        leftDown?.post(tap: .cgAnnotatedSessionEventTap)
+
+        let leftUp = CGEvent(keyboardEventSource: src, virtualKey: leftKey, keyDown: false)
+        leftUp?.flags = .maskCommand
+        leftUp?.post(tap: .cgAnnotatedSessionEventTap)
+
+        // Let the caret move land before extending.
+        Thread.sleep(forTimeInterval: 0.03)
+
+        // Step 2: Cmd+Shift+Right — extend selection to line end (logical).
+        let extendFlags: CGEventFlags = [.maskCommand, .maskShift]
+        let rightDown = CGEvent(keyboardEventSource: src, virtualKey: rightKey, keyDown: true)
+        rightDown?.flags = extendFlags
+        rightDown?.post(tap: .cgAnnotatedSessionEventTap)
+
+        let rightUp = CGEvent(keyboardEventSource: src, virtualKey: rightKey, keyDown: false)
+        rightUp?.flags = extendFlags
+        rightUp?.post(tap: .cgAnnotatedSessionEventTap)
+
         Thread.sleep(forTimeInterval: 0.05)
     }
 }
