@@ -42,7 +42,7 @@ enum SwapMode: Equatable {
 @MainActor
 final class GlobalHotkeyListener {
 
-    private static let f9KeyCode: Int64 = Int64(kVK_F9) // 0x65 = 101
+    private var hotkey: Int64 = Int64(kVK_F9)
 
     weak var appState: AppState?
 
@@ -59,6 +59,15 @@ final class GlobalHotkeyListener {
     // Passive keystroke buffer for recovering Shift+letter characters
     // swallowed by macOS on the Hebrew layout. See KeystrokeBuffer.swift.
     let keystrokeBuffer = KeystrokeBuffer()
+
+    /// Update the hotkey keycode at runtime. Stops and restarts the event tap
+    /// so the new key is recognized. Must be called on the main actor (same
+    /// actor as the CGEventTap callback, which runs on the main run loop).
+    @MainActor func updateHotkey(_ newCode: Int64) {
+        stop()
+        self.hotkey = newCode
+        start()
+    }
 
     // MARK: - Tap lifecycle
 
@@ -205,19 +214,22 @@ final class GlobalHotkeyListener {
         // live here, NOT in KeystrokeBuffer, because KeystrokeBuffer's clearing
         // rules include modifier events (Cmd/Ctrl) — if we piggybacked on that,
         // Ctrl+F9 itself would clear pendingRevert before the revert path reads it.
-        if keyCode != Self.f9KeyCode {
+        if keyCode != self.hotkey {
             appState?.clearPendingRevert()
         }
 
         // SECURITY GATE: only F9 proceeds past this point
-        guard keyCode == Self.f9KeyCode else {
+        guard keyCode == self.hotkey else {
             return event // pass through immediately
         }
 
-        // F9 with any modifier combination reaches here. Consume the event.
+        // Hotkey with any modifier combination reaches here. Consume the event.
+        #if DEBUG
+        print("[C-CALLBACK] >>> Hotkey keyDown received (keyCode=\(keyCode))")
+        #endif
         let mode = Self.swapMode(from: event.flags)
         #if DEBUG
-        print("[HotkeyListener] F9 detected (mode=\(mode)) — invoking handleF9()")
+        print("[HotkeyListener] Hotkey detected (keyCode=\(keyCode), mode=\(mode)) — invoking handler")
         #endif
         handleF9(mode: mode)
         return nil
@@ -294,15 +306,8 @@ private func globalHotkeyCallback(
     event: CGEvent,
     refcon: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
-    // Earliest possible log — runs in the C callback, before any Swift actor dispatch.
     #if DEBUG
-    if type == .keyDown {
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        if keyCode == 100 { // F9
-            print("[C-CALLBACK] >>> F9 keyDown received in raw event tap callback")
-        }
-        // SEC-1: Do NOT log non-F9 keycodes. Buffer recording handles observation.
-    } else if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         print("[C-CALLBACK] Event tap was DISABLED by system (type=\(type.rawValue))")
     }
     #endif
