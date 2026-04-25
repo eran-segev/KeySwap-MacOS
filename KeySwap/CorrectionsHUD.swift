@@ -35,6 +35,10 @@ final class CorrectionsHUD {
     private var dismissTimer: DispatchWorkItem?
     private var shownAt: Date?
 
+    /// Injected by KeySwapApp after init. Used for sound routing and
+    /// dynamic hotkey display name in the footer hint.
+    var appSettings: AppSettings?
+
     /// Adaptive duration for a given number of corrections.
     /// 3s base + 0.5s per correction, capped at 6s.
     static func duration(for correctionCount: Int) -> TimeInterval {
@@ -49,7 +53,13 @@ final class CorrectionsHUD {
     /// Show the HUD listing `corrections`. Positions cursor-adjacent if AX gives
     /// us caret bounds, otherwise top-right of the active screen. Auto-dismisses
     /// after the adaptive duration unless `dismiss()` is called first.
-    func show(corrections: [Correction], caretElement: AXUIElement?) {
+    ///
+    /// `language` controls the arrow direction and bidi rendering: English rows
+    /// render `original → replacement` (LRM-wrapped → glyph), Hebrew rows
+    /// render `original ← replacement` (RLM-wrapped ← glyph) so the arrow's
+    /// direction lines up with the reading order. The parameter is non-optional
+    /// — any forgotten call site fails to compile.
+    func show(corrections: [Correction], language: TargetLanguage, caretElement: AXUIElement?) {
         guard !corrections.isEmpty else { return }
 
         // Cancel any in-flight auto-dismiss from a prior swap.
@@ -63,7 +73,7 @@ final class CorrectionsHUD {
         // to match BEFORE assigning, because `p.contentView = contentView`
         // resizes the view to the panel's current frame (throwing away the
         // size we just computed and leaving subviews at the wrong positions).
-        let contentView = buildContent(corrections: corrections)
+        let contentView = buildContent(corrections: corrections, language: language)
         let targetSize = contentView.frame.size
         p.setContentSize(targetSize)
         p.contentView = contentView
@@ -90,11 +100,14 @@ final class CorrectionsHUD {
             p.animator().alphaValue = 1
         }
 
-        // Audible cue: a soft, short system sound. "Pop" is subtle enough to
-        // not be annoying in meetings but distinct enough to catch attention.
-        // Honors the user's system-wide alert sound setting — if they've
-        // muted alerts, this will silently no-op.
-        NSSound(named: .init("Pop"))?.play()
+        // Audible cue: routed through AppSettings for user volume/mute control.
+        // Falls back to raw NSSound if appSettings hasn't been injected yet
+        // (guards against launch-ordering races).
+        if let settings = appSettings {
+            settings.playCorrections()
+        } else {
+            NSSound(named: .init("Pop"))?.play()
+        }
 
         // Schedule auto-dismiss.
         let duration = Self.duration(for: corrections.count)
@@ -141,7 +154,7 @@ final class CorrectionsHUD {
         return p
     }
 
-    private func buildContent(corrections: [Correction]) -> NSView {
+    private func buildContent(corrections: [Correction], language: TargetLanguage) -> NSView {
         let padding: CGFloat = 12
         let rowSpacing: CGFloat = 4
         let maxRows = 8
@@ -158,10 +171,25 @@ final class CorrectionsHUD {
         let headerText = corrections.count == 1 ? "1 correction" : "\(corrections.count) corrections"
         let header = makeLabel(headerText, font: headerFont, color: .labelColor)
 
-        // Correction rows
+        // Correction rows.
+        // RTL/LTR arrow rendering: NSTextField with .naturalTextAlignment
+        // detects paragraph direction from the first strong-directional
+        // character. In a Hebrew row, a plain `→` glyph (no strong direction)
+        // would be flipped by the paragraph's RTL context. Wrapping the arrow
+        // in directional markers (LRM `\u{200E}` for English, RLM `\u{200F}`
+        // for Hebrew) locks the arrow's rendering direction explicitly.
+        // For Hebrew, we also use `←` (U+2190) so the visual arrow follows
+        // the reader's right-to-left scan order: original on the right,
+        // replacement on the left, arrow pointing toward what was read next.
         var rowViews: [NSTextField] = []
         for c in rows {
-            let line = "\(c.originalWord)  →  \(c.replacementWord)"
+            let line: String
+            switch language {
+            case .english:
+                line = "\(c.originalWord)  \u{200E}\u{2192}\u{200E}  \(c.replacementWord)"
+            case .hebrew:
+                line = "\(c.originalWord)  \u{200F}\u{2190}\u{200F}  \(c.replacementWord)"
+            }
             let row = makeLabel(line, font: rowFont, color: .labelColor)
             rowViews.append(row)
         }
@@ -173,8 +201,9 @@ final class CorrectionsHUD {
             overflowView = more
         }
 
-        // Footer hint — F9 reverts while the HUD is open (replaces Ctrl+F9)
-        let footer = makeLabel("Press F9 to revert", font: footerFont, color: .secondaryLabelColor)
+        // Footer hint — hotkey reverts while the HUD is open (replaces Ctrl+hotkey)
+        let hotkeyName = appSettings?.primaryHotkeyDisplayName ?? "F9"
+        let footer = makeLabel("Press \(hotkeyName) to revert", font: footerFont, color: .secondaryLabelColor)
 
         // Measure widths
         var contentWidth: CGFloat = header.fittingSize.width

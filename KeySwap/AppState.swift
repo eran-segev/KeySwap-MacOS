@@ -69,6 +69,14 @@ final class AppState: ObservableObject {
     private var hasAccessibility: Bool = false
     private var hasInputMonitoring: Bool = false
 
+    // MARK: - Last swap outcome (for About window status line)
+
+    private(set) var lastSwapOutcome: String?
+
+    func setLastSwapOutcome(_ outcome: String) {
+        lastSwapOutcome = outcome
+    }
+
     // MARK: - Pending revert state
 
     /// The currently-active post-swap correction that can be reverted. Never set
