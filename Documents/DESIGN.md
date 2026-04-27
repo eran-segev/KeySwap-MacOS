@@ -58,8 +58,8 @@
 - **Approach:** Native macOS conventions (grid-disciplined within Apple HIG)
 - **Window sizes:**
   - Permissions onboarding: 480x340 (single window, both permissions with status)
-  - About window: 300x200 (standard macOS about size)
-  - Future settings: 500x400 (standard preferences size)
+  - About window: 380x350 (grown from 380x320 in v1.2 to accommodate the last-swap status line)
+  - Preferences window: 500x460 (grown from 500x400 in v1.3 to accommodate per-language autocorrect toggles and inline install affordance)
 - **Alignment:** Left-aligned buttons, right-aligned status indicators (macOS convention)
 - **Border radius:** System default (NSVisualEffectView handles this)
 - **Permissions flow:** Single window with both permissions shown side-by-side, each with live status. User grants both sequentially in one window; both buttons remain active until granted.
@@ -84,10 +84,18 @@
 - **Tone:** Plain English, no jargon. "KeySwap needs permission to read your keyboard" not "Input Monitoring entitlement required"
 - **Color:** Error text in #EF4444, warning in #F59E0B
 
-## Future: V2 Settings Panel
-- **Hotkey configuration:** Standard macOS preferences window layout
-- **Design:** Follow same system: SF Pro, system colors, blue accent on save/apply buttons
-- **Extensible:** The spacing and color system scales to a preferences panel without changes
+## Bidi / RTL Rendering
+
+KeySwap's UI chrome is English-only. User text, however, can be Hebrew (or any future RTL language). When rendering correction rows or any label that mixes RTL content with directional glyphs (arrows, brackets), use explicit Unicode bidi markers to prevent NSTextField's automatic bidi from flipping glyphs relative to the surrounding text.
+
+- **Arrow direction:** English rows use `→` (U+2192). Hebrew rows use `←` (U+2190). Direction matches the target language's reading order.
+- **Marker wrapping:** Wrap the arrow character in LRM (`\u{200E}`) inside English rows, RLM (`\u{200F}`) inside Hebrew rows. Example: `"\(word) \u{200E}\u{2192}\u{200E} \(replacement)"`. This locks the arrow's render direction regardless of paragraph bidi.
+- **Do not use** `.naturalTextAlignment` for rows containing directional glyphs without markers. NSTextField infers paragraph direction from the first strong-directional character and will flip your arrow.
+- **Label ordering:** for Hebrew rows, place `original` first (leftmost in source, rightmost in visual render). The ← arrow points from replacement (left) to original (right), matching the Hebrew reader's right-to-left scan: "this word (right) was replaced by that word (left)."
+
+## Inline Action Buttons
+
+When a settings row needs a small call-to-action (e.g., "Install…", "Learn more…"), use `NSButton` with `bezelStyle = .inline` and system font at body size. Place inline with a sub-label, not on its own row. The inline bezel reads as a link-weight affordance without the full button chrome of a `.rounded` Reset-style button. Preserves the Native Minimal aesthetic: the button earns its visual weight only by proximity to the label that describes its action.
 
 ## Decisions Log
 | Date | Decision | Rationale |
@@ -95,3 +103,5 @@
 | 2026-04-03 | Initial design system created | Native Minimal aesthetic, system fonts, one blue accent. Created by /design-consultation for non-technical bilingual audience. |
 | 2026-04-03 | Fixed accent (#2563EB) over system accent | Brand consistency. Accent appears in few places, so mismatch with system accent is minimal. |
 | 2026-04-03 | Stepped permissions onboarding | One permission per screen is less intimidating for non-technical users than a checklist. |
+| 2026-04-22 | Bidi/RTL rendering rules (LRM/RLM markers around arrow glyphs) | v1.3 Hebrew spell check requires mixed Hebrew + arrow rendering in CorrectionsHUD. Unicode bidi markers prevent NSTextField auto-flip. Template for future RTL languages. |
+| 2026-04-22 | Inline action button convention (`.inline` bezel) | v1.3 Preferences needs "Install…" affordance next to a sub-label. `.inline` reads as link-weight without heavy button chrome. |
