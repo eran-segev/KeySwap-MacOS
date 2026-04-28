@@ -50,6 +50,7 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
     private var volumeLabel: NSTextField?
     private var toastRadio: NSButton?
     private var silentRadio: NSButton?
+    private var launchAtLoginCheckbox: NSButton?
 
     // MARK: - F-key mapping (ordered for popup menu)
 
@@ -88,7 +89,7 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
 
     private func buildAndShow() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 508),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -124,15 +125,12 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
             return NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 460))
         }
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 460))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 508))
         let leftPad: CGFloat = 24
         let contentWidth: CGFloat = 452 // 500 - 24*2
         let hebrewAvailable = SpellCheckAvailability.shared.hasHebrew
 
-        // Insert views top-to-bottom (tab order follows insertion order).
-        // Y-origin shifted +60pt vs v1.2 to accommodate the per-language
-        // autocorrect section.
-        var y: CGFloat = 420
+        var y: CGFloat = 468
 
         // === HOTKEY SECTION ===
         let hotkeyHeader = sectionHeader("HOTKEY")
@@ -287,6 +285,19 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
         silentRadio = silent
         y -= 40
 
+        // === STARTUP SECTION ===
+        let startupHeader = sectionHeader("STARTUP")
+        startupHeader.frame = NSRect(x: leftPad, y: y, width: contentWidth, height: 20)
+        container.addSubview(startupHeader)
+        y -= 28
+
+        let launchCheck = NSButton(checkboxWithTitle: "Launch at login", target: self, action: #selector(launchAtLoginToggled(_:)))
+        launchCheck.state = settings.launchAtLogin ? .on : .off
+        launchCheck.frame = NSRect(x: leftPad, y: y, width: contentWidth, height: 20)
+        container.addSubview(launchCheck)
+        launchAtLoginCheckbox = launchCheck
+        y -= 20
+
         // === RESET BUTTON ===
         let resetBtn = NSButton(title: "Reset to Defaults", target: self, action: #selector(resetToDefaults(_:)))
         resetBtn.bezelStyle = .rounded
@@ -372,6 +383,12 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
         }
     }
 
+    @objc private func launchAtLoginToggled(_ sender: NSButton) {
+        appSettings?.launchAtLogin = sender.state == .on
+        // Sync checkbox back to actual SMAppService state in case the OS rejected the change.
+        launchAtLoginCheckbox?.state = (appSettings?.launchAtLogin ?? false) ? .on : .off
+    }
+
     @objc private func resetToDefaults(_ sender: NSButton) {
         guard let settings = appSettings else { return }
         settings.resetToDefaults()
@@ -388,6 +405,8 @@ final class PreferencesWindow: NSObject, NSWindowDelegate {
         volumeSlider?.isEnabled = settings.soundsEnabled
         toastRadio?.state = settings.errorFeedbackMode == .toast ? .on : .off
         silentRadio?.state = settings.errorFeedbackMode == .silent ? .on : .off
+        // Launch-at-login is not reset — it's a system-level setting the user set explicitly.
+        launchAtLoginCheckbox?.state = settings.launchAtLogin ? .on : .off
     }
 
     // MARK: - Helpers

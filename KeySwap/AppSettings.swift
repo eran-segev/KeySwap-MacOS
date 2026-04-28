@@ -1,5 +1,6 @@
 import Cocoa
 import Carbon
+import ServiceManagement
 
 // MARK: - ErrorFeedbackMode
 
@@ -98,6 +99,24 @@ final class AppSettings {
             return defaults.bool(forKey: Key.spellCheckEnabledHebrew)
         }
         set { defaults.set(newValue, forKey: Key.spellCheckEnabledHebrew) }
+    }
+
+    var launchAtLogin: Bool {
+        get {
+            let status = SMAppService.mainApp.status
+            return status == .enabled || status == .requiresApproval
+        }
+        set {
+            do {
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                print("[AppSettings] launchAtLogin set(\(newValue)) failed: \(error)")
+            }
+        }
     }
 
     var errorFeedbackMode: ErrorFeedbackMode {

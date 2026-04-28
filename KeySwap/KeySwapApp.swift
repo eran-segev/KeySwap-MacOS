@@ -72,11 +72,6 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         let bundlePath = Bundle.main.bundlePath
         print("[KeySwap] Launching v\(ver) (build \(build)) from \(bundlePath)")
 
-        // Register as a login item immediately (best-effort; failure is non-fatal for MVP)
-        if #available(macOS 13.0, *) {
-            try? SMAppService.mainApp.register()
-        }
-
         // Wire AppSettings into components
         correctionsHUD.appSettings = appSettings
         errorFeedbackHUD.appSettings = appSettings

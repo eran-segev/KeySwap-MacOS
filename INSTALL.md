@@ -8,14 +8,14 @@
 ## Installation Methods
 
 ### Method 1: DMG Installer (Recommended)
-1. Download `KeySwap-1.2.0.0.dmg`
+1. Download `KeySwap-1.2.1.0.dmg`
 2. Double-click to mount the disk image
 3. Drag the KeySwap.app to your Applications folder
 4. Eject the disk image
 5. Open Applications and launch KeySwap
 
 ### Method 2: ZIP Archive
-1. Download `KeySwap-1.2.0.0.zip`
+1. Download `KeySwap-1.2.1.0.zip`
 2. Extract the archive
 3. Drag KeySwap.app to your Applications folder
 
