@@ -1,6 +1,6 @@
 # KeySwap macOS
 
-Native macOS background daemon that corrects bilingual Hebrew/English typing errors via F9 hotkey.
+Native macOS background daemon that corrects bilingual Hebrew/English typing errors via a configurable hotkey (default F9). Includes Preferences window, Hebrew spell check, and per-language autocorrect toggles as of v1.2.
 
 ## Documentation
 

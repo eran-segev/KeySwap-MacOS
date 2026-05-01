@@ -1,0 +1,20 @@
+.DS_Store
+/.build
+*/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+*.xcuserstate
+xcuserdata/
+
+# Release artifacts
+release/
+*.dmg
+*.zip
+/build/
+
+# gstack local tooling artifacts (security reports, plans, analytics)
+.gstack/

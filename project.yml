@@ -1,0 +1,69 @@
+name: KeySwap
+options:
+  bundleIdPrefix: com.ersegev
+  deploymentTarget:
+    macOS: "13.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  TranslationContext:
+    path: TranslationContext
+
+targets:
+  KeySwap:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+
+    sources:
+      - path: KeySwap
+        excludes:
+          - "*.plist"
+          - "*.entitlements"
+
+    dependencies:
+      - package: TranslationContext
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ersegev.KeySwap
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+        # Stable signing identity: without these, xcodegen regenerations drop
+        # the Xcode-UI-set team and builds fall back to ad-hoc signing. Ad-hoc
+        # sigs change every build, which invalidates the macOS Accessibility
+        # (TCC) grant on every rebuild.
+        DEVELOPMENT_TEAM: "74WZTVKZ8H"
+        CODE_SIGN_IDENTITY: "Apple Development"
+        INFOPLIST_FILE: KeySwap/Info.plist
+        CODE_SIGN_ENTITLEMENTS: KeySwap/KeySwap.entitlements
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        ENABLE_HARDENED_RUNTIME: YES
+        # Info.plist is provided as a file; do not auto-generate
+        GENERATE_INFOPLIST_FILE: NO
+
+  KeySwapTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+
+    sources:
+      - path: KeySwapTests
+
+    dependencies:
+      - target: KeySwap
+      - package: TranslationContext
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ersegev.KeySwapTests
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+        SWIFT_VERSION: "5.9"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "74WZTVKZ8H"
+        CODE_SIGN_IDENTITY: "Apple Development"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/KeySwap.app/Contents/MacOS/KeySwap"
+        BUNDLE_LOADER: "$(TEST_HOST)"

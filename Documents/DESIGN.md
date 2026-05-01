@@ -84,12 +84,8 @@
 - **Tone:** Plain English, no jargon. "KeySwap needs permission to read your keyboard" not "Input Monitoring entitlement required"
 - **Color:** Error text in #EF4444, warning in #F59E0B
 
-## Future: V2 Settings Panel
-- **Hotkey configuration:** Standard macOS preferences window layout
-- **Design:** Follow same system: SF Pro, system colors, blue accent on save/apply buttons
-- **Extensible:** The spacing and color system scales to a preferences panel without changes
-
 ## Bidi / RTL Rendering
+
 KeySwap's UI chrome is English-only. User text, however, can be Hebrew (or any future RTL language). When rendering correction rows or any label that mixes RTL content with directional glyphs (arrows, brackets), use explicit Unicode bidi markers to prevent NSTextField's automatic bidi from flipping glyphs relative to the surrounding text.
 
 - **Arrow direction:** English rows use `→` (U+2192). Hebrew rows use `←` (U+2190). Direction matches the target language's reading order.
@@ -98,6 +94,7 @@ KeySwap's UI chrome is English-only. User text, however, can be Hebrew (or any f
 - **Label ordering:** for Hebrew rows, place `original` first (leftmost in source, rightmost in visual render). The ← arrow points from replacement (left) to original (right), matching the Hebrew reader's right-to-left scan: "this word (right) was replaced by that word (left)."
 
 ## Inline Action Buttons
+
 When a settings row needs a small call-to-action (e.g., "Install…", "Learn more…"), use `NSButton` with `bezelStyle = .inline` and system font at body size. Place inline with a sub-label, not on its own row. The inline bezel reads as a link-weight affordance without the full button chrome of a `.rounded` Reset-style button. Preserves the Native Minimal aesthetic: the button earns its visual weight only by proximity to the label that describes its action.
 
 ## Decisions Log
