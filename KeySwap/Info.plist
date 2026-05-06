@@ -16,7 +16,7 @@
     <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
 
     <key>CFBundleShortVersionString</key>
     <string>1.2.1</string>

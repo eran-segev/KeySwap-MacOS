@@ -5,6 +5,14 @@ All notable changes to KeySwap for macOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1.1] - 2026-05-06
+
+### Fixed
+
+- **Text direction in Chrome browsers** — Paragraph direction (RTL/LTR) now flips correctly when swapping in Gmail, Google Docs, Microsoft Edge, Brave, and other Chromium-based browsers. Chrome renders text via Blink rather than NSTextView, so it doesn't expose a "Format → Writing Direction" menu via the macOS accessibility API. KeySwap now uses AppleScript to execute a small JavaScript snippet that sets `style.direction` on the focused contenteditable element directly.
+
+---
+
 ## [1.2.1.0] - 2026-04-28
 
 ### Added
