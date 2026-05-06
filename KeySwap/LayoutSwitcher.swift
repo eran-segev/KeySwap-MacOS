@@ -170,6 +170,15 @@ final class LayoutSwitcher {
             return flipWritingDirectionInWord(to: direction)
         }
 
+        // Chromium-based browsers (Chrome, Edge, Brave, …) don't surface
+        // "Format > Writing Direction" in the macOS menu bar because they
+        // render text via Blink, not NSTextView. Use AppleScript to execute
+        // a small JS snippet that sets `style.direction` on the focused
+        // contenteditable element instead.
+        if let appName = chromiumAppleScriptName(for: app.bundleIdentifier) {
+            return flipWritingDirectionInChromium(appName: appName, to: direction)
+        }
+
         let appEl = AXUIElementCreateApplication(app.processIdentifier)
         var menuBarRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appEl, kAXMenuBarAttribute as CFString, &menuBarRef) == .success,
@@ -272,6 +281,80 @@ final class LayoutSwitcher {
         print("[LayoutSwitcher] Word direction flip (\(commandName)): ran")
         #endif
         return .flipped
+    }
+
+    // MARK: - Chromium browser direction
+
+    /// Returns the AppleScript application name for known Chromium-based browsers,
+    /// or nil if the bundle ID is not a recognized Chromium browser.
+    private func chromiumAppleScriptName(for bundleID: String?) -> String? {
+        switch bundleID {
+        case "com.google.Chrome":           return "Google Chrome"
+        case "com.google.Chrome.beta":      return "Google Chrome Beta"
+        case "com.google.Chrome.canary":    return "Google Chrome Canary"
+        case "com.brave.Browser":           return "Brave Browser"
+        case "com.microsoft.edgemac":       return "Microsoft Edge"
+        case "org.chromium.Chromium":       return "Chromium"
+        default:                            return nil
+        }
+    }
+
+    /// Flips paragraph direction in a Chromium-based browser by executing a small
+    /// JavaScript snippet via AppleScript. The script walks up from the focused
+    /// element to the nearest contenteditable ancestor and sets `style.direction`.
+    /// First invocation triggers macOS's Apple Events consent prompt.
+    private func flipWritingDirectionInChromium(appName: String, to direction: Direction) -> WritingDirectionResult {
+        let dir: String
+        switch direction {
+        case .hebrewToEnglish: dir = "ltr"
+        case .englishToHebrew: dir = "rtl"
+        }
+
+        // Walk up from activeElement to the nearest contenteditable ancestor,
+        // then set style.direction. Falls back to activeElement itself if no
+        // contenteditable ancestor is found (handles plain <textarea> / <input>).
+        let js = """
+        (function(){
+            var el = document.activeElement;
+            var target = null;
+            var cur = el;
+            while (cur && cur.tagName !== 'BODY') {
+                if (cur.contentEditable === 'true') { target = cur; break; }
+                cur = cur.parentElement;
+            }
+            if (!target) target = el;
+            if (target) { target.style.direction = '\(dir)'; return 'ok'; }
+            return 'no-target';
+        })()
+        """
+
+        let escapedJS = js.replacingOccurrences(of: "\\", with: "\\\\")
+                          .replacingOccurrences(of: "\"", with: "\\\"")
+        let source = """
+        tell application "\(appName)"
+            execute front window's active tab javascript "\(escapedJS)"
+        end tell
+        """
+
+        guard let script = NSAppleScript(source: source) else {
+            #if DEBUG
+            print("[LayoutSwitcher] Chromium direction flip: NSAppleScript init failed")
+            #endif
+            return .unavailable
+        }
+        var error: NSDictionary?
+        let result = script.executeAndReturnError(&error)
+        if let error = error {
+            #if DEBUG
+            print("[LayoutSwitcher] Chromium direction flip (\(appName), \(dir)): AppleScript error = \(error)")
+            #endif
+            return .unavailable
+        }
+        let resultString = result.stringValue ?? ""
+        #if DEBUG
+        print("[LayoutSwitcher] Chromium direction flip (\(appName), \(dir)): JS returned \"\(resultString)\"")
+        #endif
+        return resultString == "ok" ? .flipped : .unavailable
     }
 
     /// Pure, testable decision for a single menu node: given its title, whether
