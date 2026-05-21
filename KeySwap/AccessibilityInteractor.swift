@@ -258,9 +258,21 @@ final class AccessibilityInteractor {
         if err == .success, settable.boolValue { return .ok }
 
         err = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
-        guard err == .success, settable.boolValue else { return .readOnly }
+        if err == .success, settable.boolValue { return .ok }
 
-        return .ok
+        // AXTextArea and AXTextField are inherently editable roles. Some apps
+        // (Word's note/comment panel is the known case) incorrectly report both
+        // attributes as non-settable even though the field accepts keyboard input
+        // and Cmd+V paste. Trust the role over the broken settable flag — the write
+        // path will attempt AX first and fall back to Cmd+V if AX is rejected.
+        var roleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
+           let role = roleRef as? String,
+           role == kAXTextAreaRole as String || role == kAXTextFieldRole as String {
+            return .ok
+        }
+
+        return .readOnly
     }
 
     // MARK: - Selection range helpers
@@ -319,11 +331,14 @@ final class AccessibilityInteractor {
         print("[AXInteractor] write via kAXSelectedTextAttribute → \(selErr.rawValue)")
         #endif
         if selErr == .success {
-            // Verify it actually changed — some apps return success but silently ignore.
-            if let val = currentValue(of: element), val.contains(text) {
-                // Explicitly reposition cursor to end of inserted text.
-                // kAXSelectedTextAttribute with a backward selection (e.g. from Cmd+Shift+Left)
-                // may leave the cursor at the start of the replaced range.
+            let currentVal = currentValue(of: element)
+            if currentVal == nil || currentVal!.contains(text) {
+                // Two cases where we trust the write:
+                //   1. kAXValueAttribute is nil — app doesn't expose this attribute
+                //      (Word notes/comments, some sandboxed fields). Can't verify, but
+                //      AX reported success so trust it. Falling back to Cmd+V would
+                //      cause a double-write since the AX write already landed.
+                //   2. Value confirmed — text appears in the field value.
                 let newLocation = selRange.location + text.utf16.count
                 var newRange = CFRange(location: newLocation, length: 0)
                 if let rangeValue = AXValueCreate(.cfRange, &newRange) {
@@ -331,6 +346,8 @@ final class AccessibilityInteractor {
                 }
                 return .success
             }
+            // kAXValueAttribute returned a value but doesn't contain the written text —
+            // app returned success but silently ignored the write (known Electron pattern).
             #if DEBUG
             print("[AXInteractor] kAXSelectedTextAttribute returned success but text didn't change — falling back")
             #endif
@@ -352,6 +369,16 @@ final class AccessibilityInteractor {
         #endif
         switch valErr {
         case .success:
+            // Verify the splice actually landed — some apps (Word's note/comment panel)
+            // accept kAXValueAttribute writes and return success but silently ignore them.
+            // Re-read the value and compare to `modified`; if they differ, the write
+            // was a no-op and Cmd+V paste is the only path left.
+            if let reread = currentValue(of: element), reread != modified {
+                #if DEBUG
+                print("[AXInteractor] kAXValueAttribute splice returned success but value didn't change — clipboard fallback")
+                #endif
+                return .needsClipboardFallback
+            }
             // Reposition cursor to end of inserted text.
             let newLocation = selRange.location + text.utf16.count
             var range = CFRange(location: newLocation, length: 0)

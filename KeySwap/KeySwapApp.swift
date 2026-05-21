@@ -63,6 +63,29 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
     // MARK: - applicationDidFinishLaunching
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Enforce single instance. LSMultipleInstancesProhibited in Info.plist handles
+        // Finder/dock launches; this runtime check catches the edge case where two copies
+        // of the app exist at different paths (e.g., Downloads and Applications).
+        let bundleID = Bundle.main.bundleIdentifier ?? ""
+        guard !bundleID.isEmpty else { return }
+        let duplicates = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { !$0.isTerminated && $0 != NSRunningApplication.current }
+        if !duplicates.isEmpty {
+            if #available(macOS 14.0, *) {
+                duplicates.first?.activate()
+            } else {
+                duplicates.first?.activate(options: .activateIgnoringOtherApps)
+            }
+            let alert = NSAlert()
+            alert.messageText = "KeySwap is already running"
+            alert.informativeText = "Only one instance of KeySwap can run at a time."
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            NSApp.terminate(nil)
+            return
+        }
+
         // Log the running build identity. Printed unconditionally (not DEBUG-gated)
         // so release builds also surface this — makes it trivial to confirm which
         // version is running via Console.app or Xcode's console.
@@ -646,6 +669,10 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
         #endif
 
         // 4. Write translated text back
+        // Capture at pipeline time so async closures below see the app that was
+        // frontmost when the swap was triggered, not whatever is frontmost later.
+        let isChromium = layoutSwitcher.isChromiumBrowser(bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+
         if let el = axElement {
             // Capture the insertion start location BEFORE the write so the revert
             // path knows which UTF16 range to re-select later. The write path
@@ -662,7 +689,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             switch axResult {
             case .success:
                 layoutSwitcher.switchLayout(to: direction)
-                if fallbackUsed {
+                if fallbackUsed || isChromium {
                     let dirResult = layoutSwitcher.flipWritingDirection(to: direction)
                     announceDirectionFlip(dirResult, to: direction)
                 }
@@ -685,7 +712,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
                     guard let self else { return }
                     if pasted {
                         self.layoutSwitcher.switchLayout(to: direction)
-                        if fallbackUsed {
+                        if fallbackUsed || isChromium {
                             let dirResult = self.layoutSwitcher.flipWritingDirection(to: direction)
                             self.announceDirectionFlip(dirResult, to: direction)
                         }
@@ -719,7 +746,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             ) { [weak self] in
                 guard let self else { return }
                 self.layoutSwitcher.switchLayout(to: direction)
-                if fallbackUsed {
+                if fallbackUsed || isChromium {
                     let dirResult = self.layoutSwitcher.flipWritingDirection(to: direction)
                     self.announceDirectionFlip(dirResult, to: direction)
                 }

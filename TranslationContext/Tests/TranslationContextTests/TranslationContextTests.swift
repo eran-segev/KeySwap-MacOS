@@ -234,6 +234,47 @@ struct EdgeCaseTests {
     }
 }
 
+// MARK: - Regression tests
+
+@Suite("Regression tests")
+struct RegressionTests {
+    let tc = TranslationContext()
+
+    // Regression: ISSUE-001 — ASCII apostrophe U+0027 not mapped to 'w' in Hebrew→English
+    // Found by /qa on 2026-05-07
+    // Report: .gstack/qa-reports/
+    //
+    // Apps and keyboards commonly substitute U+0027 (') for U+05F3 (׳ Hebrew Geresh)
+    // when typing the 'w' key in Hebrew mode. The swap engine must recognise both.
+    @Test("ASCII apostrophe U+0027 maps to 'w' when swapping Hebrew to English")
+    func asciiApostropheMapsToW() {
+        // ' is U+0027; ׳ is U+05F3 (Geresh). Both represent the 'w' key on Hebrew layout.
+        #expect(tc.translate("'", to: .english) == "w",
+                "U+0027 apostrophe must map to 'w' (common substitute for Hebrew Geresh ׳)")
+        // The canonical Geresh still maps correctly
+        #expect(tc.translate("׳", to: .english) == "w",
+                "U+05F3 Hebrew Geresh must still map to 'w'")
+    }
+
+    @Test("Full phrase with ASCII apostrophe swaps correctly")
+    func phraseWithApostrophe() {
+        // 'יט = apostrophe + yod + tet, typed on Hebrew keyboard for 'why'
+        // This is the bug reported by the user: 'יט גם טםו גם' was swapping to 'hy do you do'
+        // (missing the leading 'w' because ' was not mapped)
+        let input = "'יט"
+        let result = tc.translate(input, to: .english)
+        #expect(result == "why",
+                "'\u{05D9}\u{05D8}' should translate to 'why', got '\(result)'")
+    }
+
+    @Test("ASCII apostrophe in English→Hebrew direction is unaffected (maps to comma)")
+    func apostropheEnglishToHebrewUnchanged() {
+        // In English→Hebrew direction, apostrophe key produces Hebrew comma (existing behaviour)
+        #expect(tc.translate("'", to: .hebrew) == ",",
+                "English apostrophe should still map to Hebrew comma in en→he direction")
+    }
+}
+
 // MARK: - Performance
 
 @Suite("Performance")

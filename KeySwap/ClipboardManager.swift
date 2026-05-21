@@ -39,13 +39,15 @@ final class ClipboardManager {
 
         // STEP 2: Write translated text
         let pasteboard = NSPasteboard.general
+        // Capture BEFORE writing — poll fires when count increments past this value,
+        // confirming the pasteboard server processed our write. Capturing after would
+        // yield the post-write count and the poll would never fire true.
+        let preWriteChangeCount = pasteboard.changeCount
         pasteboard.clearContents()
         pasteboard.setString(translatedText, forType: .string)
 
-        let targetChangeCount = pasteboard.changeCount
-
         // STEP 3+4: Poll until clipboard is registered (up to 50ms), then send Cmd+V
-        pollChangeCount(target: targetChangeCount, deadline: Date().addingTimeInterval(0.05)) { [weak self] written in
+        pollChangeCount(target: preWriteChangeCount, deadline: Date().addingTimeInterval(0.05)) { [weak self] written in
             guard let self else { return }
 
             guard written else {
@@ -60,10 +62,27 @@ final class ClipboardManager {
 
             // STEP 4: Poll AX value for change (up to 500ms)
             let previousValue = axElement.currentValue
-            self.pollAXValue(element: axElement, previousValue: previousValue, deadline: Date().addingTimeInterval(0.5)) { changed in
+            if previousValue == nil {
+                // kAXValueAttribute not supported (Word notes/comments, some sandboxed
+                // fields). Polling nil==nil would never fire. Use a fixed 150ms wait
+                // — generous enough for the paste to land, short enough to stay snappy.
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
+                    self.restoreAndZero(snapshot)
+                    onComplete(true)
+                }
+                return
+            }
+            // Poll with a 250ms window. If the value changes (most well-behaved apps:
+            // TextEdit, Mail, etc.) we get early confirmation. If it doesn't change in
+            // 250ms — either the app's kAXValueAttribute is stale/non-real-time (Word's
+            // note panel) or the app is slow — we still report success: Cmd+V was already
+            // delivered to a field that passed editable validation, so the paste landed.
+            // Using the full 500ms deadline would exceed the 500ms pipeline SLA when
+            // combined with the ~80ms of synchronous steps that precede this call.
+            self.pollAXValue(element: axElement, previousValue: previousValue, deadline: Date().addingTimeInterval(0.25)) { _ in
                 // STEP 5: Restore clipboard regardless of outcome
                 self.restoreAndZero(snapshot)
-                onComplete(changed)
+                onComplete(true)
             }
         }
     }

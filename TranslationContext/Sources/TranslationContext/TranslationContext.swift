@@ -98,6 +98,10 @@ public struct TranslationContext {
         for (eng, heb) in englishToHebrew {
             reversed[heb] = eng
         }
+        // U+0027 ASCII apostrophe is a common substitute for U+05F3 Hebrew Geresh (the 'w' key)
+        // in apps and keyboards that don't emit the proper Unicode character. Map it to 'w' so
+        // text like 'why typed in Hebrew mode swaps correctly even when Geresh wasn't produced.
+        reversed["'"] = "w"
         return reversed
     }()
 

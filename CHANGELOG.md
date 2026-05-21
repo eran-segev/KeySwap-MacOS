@@ -5,6 +5,42 @@ All notable changes to KeySwap for macOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-21
+
+### Fixed
+
+- **Swap now works in Microsoft Word note and comment panels** — Word's note/comment panel incorrectly reports both `kAXSelectedTextAttribute` and `kAXValueAttribute` as non-settable even though the field accepts keyboard input and paste. KeySwap now trusts the AX role (`AXTextArea`/`AXTextField`) over the broken settable flag and attempts the write anyway — falling back to Cmd+V paste if AX is rejected at write time. Previously the panel was treated as read-only and every swap attempt silently failed.
+
+- **Clipboard paste now reliably fires in Word note/comment panels** — The pasteboard change-count used to poll for write confirmation was captured *after* the write instead of before it. This meant the poll saw the post-write count and never detected a change, so the Cmd+V paste trigger never fired. Count is now captured before `clearContents()`.
+
+- **Clipboard fallback for fields with no `kAXValueAttribute`** — Fields that don't expose `kAXValueAttribute` (Word notes/comments, some sandboxed fields) caused the AX-value polling loop to compare `nil == nil` on every tick and never resolve. These fields now use a fixed 150 ms wait — generous enough for the paste to land, short enough to stay responsive.
+
+- **Writing direction in Word note/comment panels** — The VBA macro used to flip paragraph direction fails in Word's note/comment panel context (error −1708, wrong AppleScript context). KeySwap now falls back to a generic menu-bar AX traversal that finds the active "Format → Writing Direction" item regardless of focus context.
+
+- **Spurious AX write success from Word's kAXValueAttribute path** — Word's note/comment panel accepts `kAXValueAttribute` writes, returns success, but silently ignores them. KeySwap now re-reads the value after writing and routes to the Cmd+V clipboard path if the value didn't change.
+
+- **Chromium direction flip now consistent across all swap paths** — The Chromium browser check was re-evaluated inside the async clipboard-only closure, so an app switch during a long paste could cause the direction flip to fire on the wrong app. Now captured once at pipeline start and used by all branches.
+
+---
+
+## [1.2.2.0] - 2026-05-06
+
+### Fixed
+
+- **Version number now shows correctly in About window** — The About window was displaying `1.2.1` instead of the current version. Fixed by updating `CFBundleShortVersionString` in Info.plist to `1.2.2` (Apple requires three-part versions in this key; the full four-part version is tracked in the `VERSION` file).
+
+- **Single-instance enforcement** — KeySwap now prevents multiple instances from running simultaneously. A second launch will activate the already-running instance and show a brief "KeySwap is already running" dialog before exiting. Previously, two instances could coexist silently, causing duplicate hotkey listeners and unpredictable swap behavior. Enforced both at the OS level (`LSMultipleInstancesProhibited`) and via a runtime check on launch.
+
+### Added
+
+- **DMG now includes drag-to-Applications shortcut** — The installer DMG contains a shortcut to `/Applications` alongside `KeySwap.app`, so installation is a single drag without needing to open a separate Finder window. Standard macOS install pattern.
+
+- **Release script (`scripts/release.sh`)** — New helper script that bumps all version fields (`VERSION` file, `CFBundleShortVersionString`, `CFBundleVersion`) in one command, then prints step-by-step instructions for building and packaging the release. Eliminates the manual version-field drift that caused the 1.2.1 display bug.
+
+- **DMG build script (`scripts/build-dmg.sh`)** — Creates a distributable DMG with the Applications symlink from a built `.app`. Takes `<path-to-app> <version>` as arguments. Safe to re-run (overwrites existing DMG).
+
+---
+
 ## [1.2.1.1] - 2026-05-06
 
 ### Fixed
