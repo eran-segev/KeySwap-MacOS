@@ -2,6 +2,14 @@
 
 Items deferred during CEO review (2026-04-02). Not in MVP scope.
 
+## P1 — Correctness
+
+- [ ] **Clipboard sentinel to eliminate `copyViaClipboard` race condition.** `copyViaClipboard` detects a Cmd+C response by watching `NSPasteboard.changeCount`. If another app (password manager, Pasta, CleanMyMac) writes to the clipboard during the 200ms poll window, KeySwap reads that app's content as the user's selected text and silently translates the wrong thing. The v1.3.1 OneNote retry (150ms sleep before second attempt) widens the race window to ~350ms. **Fix sketch:** before sending Cmd+C, write a unique sentinel string to the clipboard (UUID), then poll until changeCount changes AND clipboard contents ≠ sentinel. If still equal to sentinel after timeout, treat as no selection (Cmd+C was a no-op). This eliminates the race entirely. **Scope:** `readSelectionViaClipboard()` → `copyViaClipboard()` in AccessibilityInteractor.swift. **Dependency:** none — standalone refactor. Noticed by adversarial review on OneNote_buf_Fix branch (2026-06-14).
+
+## P0 — Infrastructure
+
+- [ ] **XCTest runner fails on macOS 26 / Xcode 26.5 (IDELaunchServicesLauncher error, code 20).** `xcodebuild test` cannot launch `KeySwapTests` as a host-app test; `IDELaunchServicesLauncher` fails before any test case runs. The app itself launches fine via `open`. Root cause is an `@rpath/KeySwap.debug.dylib` resolution gap that was patched in `project.pbxproj` (added `@loader_path/../../MacOS` to `LD_RUNPATH_SEARCH_PATHS` for the test target), but the higher-level LaunchServices failure persists on macOS 26 beta — likely a beta-specific regression in how Xcode test hosts are injected. **Fix sketch:** (1) File FB with Apple for IDELaunchErrorDomain code 20 on macOS 26.5.1 / Xcode 26.5 with accessibility-entitlement apps. (2) Check macOS 26 release notes for test-host entitlement changes. (3) If not fixed by GA, add `com.apple.security.cs.allow-dyld-environment-variables` to the debug entitlements (required for DYLD_INSERT_LIBRARIES injection on Hardened Runtime targets). Noticed: 2026-06-14 on branch OneNote_buf_Fix.
+
 ## Shipped Post-MVP (2026-04-xx)
 
 ### P1 Bugs Fixed

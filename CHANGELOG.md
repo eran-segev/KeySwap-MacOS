@@ -5,6 +5,13 @@ All notable changes to KeySwap for macOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-06-14
+
+### Fixed
+
+- **OneNote async selection buffer** — OneNote commits its AX text selection asynchronously after a key macro lands. A single read at t+50ms missed the selection even when it was visually present, causing KeySwap to silently fall through to the clipboard path. Fixed by polling `kAXSelectedTextAttribute` every 20ms for up to 100ms in both AX macro fallback paths. Added a 150ms retry on the clipboard path for apps that also commit their clipboard selection asynchronously (both macro #1 and macro #2 retry paths in `readSelectionViaClipboard`).
+- **XCTest rpath for macOS 26** — Added `@loader_path/../../MacOS` to the test target's `LD_RUNPATH_SEARCH_PATHS` so `KeySwap.debug.dylib` resolves correctly when the test bundle is loaded as a host-app plugin.
+
 ## [1.3.0] - 2026-05-21
 
 ### Fixed
