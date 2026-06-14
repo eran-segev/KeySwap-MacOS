@@ -1,6 +1,6 @@
 # KeySwap macOS
 
-Native macOS background daemon that corrects bilingual Hebrew/English typing errors via a configurable hotkey (default F9). Includes Preferences window, Hebrew spell check, and per-language autocorrect toggles (v1.2). v1.3 adds full Microsoft Word note/comment panel compatibility and consistent Chromium writing-direction flipping.
+Native macOS background daemon that corrects bilingual Hebrew/English typing errors via a configurable hotkey (default F9). Includes Preferences window, Hebrew spell check, and per-language autocorrect toggles (v1.2). v1.3 adds full Microsoft Word note/comment panel compatibility and consistent Chromium writing-direction flipping. v1.3.1 fixes async-selection timing in Microsoft OneNote and similar apps.
 
 ## Documentation
 
