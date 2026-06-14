@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Chromium direction flip now consistent across all swap paths** — The Chromium browser check was re-evaluated inside the async clipboard-only closure, so an app switch during a long paste could cause the direction flip to fire on the wrong app. Now captured once at pipeline start and used by all branches.
 
+- **ASCII apostrophe swaps correctly in Hebrew→English** — Apps and some keyboards substitute ASCII apostrophe U+0027 for the Hebrew Geresh character U+05F3 (the `w` key on the Hebrew layout). The mapping table now handles both — `'יט` correctly swaps to `why`.
+
 ---
 
 ## [1.2.2.0] - 2026-05-06
