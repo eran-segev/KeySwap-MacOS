@@ -65,10 +65,11 @@ F9 keydown
     ├── IsSecureEventInputEnabled() (if true → beep + abort)
     │
     ▼
-Read text via kAXSelectedTextAttribute
+Read text via kAXSelectedTextAttribute (poll every 20ms, up to 100ms)
     │
-    ├── Empty? → Cmd+Shift+Left fallback → retry read
-    ├── Still empty? → beep + abort
+    ├── Empty? → Cmd+Shift+Left fallback → poll kAXSelectedTextAttribute (20ms × 5)
+    ├── Still empty? → clipboard fallback (Cmd+C, 200ms poll; retry after 150ms if nil)
+    ├── All paths empty? → beep + abort
     ├── Read-only field? → beep + abort
     ├── > 2000 chars? → beep + abort
     │
@@ -491,6 +492,19 @@ Security review adds 4 new test cases:
 ## Post-MVP Additions (2026-04-xx)
 
 After MVP v1.0 shipped, the following items were implemented beyond the original scope:
+
+### Bug Fix: OneNote Async-Selection (v1.3.1)
+
+**Issue:** Microsoft OneNote (and similar apps) commits the AX text selection asynchronously after a key macro lands. A single `kAXSelectedTextAttribute` read at t+50ms returned nil even when the selection was visually present, causing KeySwap to silently fall through to the clipboard path — which also failed because the clipboard Cmd+C arrived before the selection was committed.
+
+**Solution:** Two-layer fix in `AccessibilityInteractor.swift`:
+
+1. `pollForSelectedText(from:timeoutMS:)` — polls `kAXSelectedTextAttribute` every 20ms for up to 100ms (5 attempts). Fast apps (read succeeds on first attempt) incur no extra delay. Replaces both `selectedText()` calls in the AX macro fallback paths.
+2. 150ms clipboard retry — in `readSelectionViaClipboard()`, if `copyViaClipboard()` returns nil on the first attempt (for both macro #1 and macro #2 paths), sleep 150ms and retry. Gives apps time to commit the clipboard selection after the Cmd+C arrives.
+
+**Known trade-off:** The 150ms sleep widens the clipboard-race window to ~350ms. A sentinel-based fix is tracked in TODOS.md (P1 — Correctness).
+
+---
 
 ### P1 Bug Fix: Shift+Letter Characters on Hebrew Layout
 

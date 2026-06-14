@@ -81,7 +81,11 @@ final class AccessibilityInteractor {
                 // logical line start). Works when caret is mid-line.
                 selectCurrentLine()
                 axMacrosFired = true
-                if let text = selectedText(from: element), !text.isEmpty {
+                // Poll rather than read once — some apps (e.g. OneNote) update
+                // kAXSelectedTextAttribute asynchronously after a key macro lands,
+                // so a single read at t+50ms misses the selection even though it is
+                // visually present. Polling retries up to 100ms at 20ms intervals.
+                if let text = pollForSelectedText(from: element), !text.isEmpty {
                     #if DEBUG
                     print("[AXInteractor] readSelectedText: Cmd+Shift+Left fallback got \(text.count) chars")
                     #endif
@@ -96,7 +100,7 @@ final class AccessibilityInteractor {
                 print("[AXInteractor] readSelectedText: macro #1 empty, trying whole-line macro...")
                 #endif
                 selectWholeLine()
-                if let text = selectedText(from: element), !text.isEmpty {
+                if let text = pollForSelectedText(from: element), !text.isEmpty {
                     #if DEBUG
                     print("[AXInteractor] readSelectedText: whole-line fallback got \(text.count) chars")
                     #endif
@@ -147,6 +151,18 @@ final class AccessibilityInteractor {
             selectCurrentLine()
             fallbackUsed = true
             text = copyViaClipboard(pasteboard: pasteboard)
+            // Retry with extra wait: some apps (e.g. OneNote) commit the selection
+            // asynchronously after the macro key lands. The 50ms sleep inside
+            // selectCurrentLine() plus the 200ms clipboard poll is not enough —
+            // Cmd+C arrives before the selection is committed. Sending Cmd+C again
+            // after an additional 150ms gives those apps time to catch up.
+            if text == nil {
+                #if DEBUG
+                print("[AXInteractor] clipboard path: macro #1 retry after extra wait")
+                #endif
+                Thread.sleep(forTimeInterval: 0.15)
+                text = copyViaClipboard(pasteboard: pasteboard)
+            }
         }
 
         if text == nil {
@@ -157,6 +173,13 @@ final class AccessibilityInteractor {
             #endif
             selectWholeLine()
             text = copyViaClipboard(pasteboard: pasteboard)
+            if text == nil {
+                #if DEBUG
+                print("[AXInteractor] clipboard path: macro #2 retry after extra wait")
+                #endif
+                Thread.sleep(forTimeInterval: 0.15)
+                text = copyViaClipboard(pasteboard: pasteboard)
+            }
         }
 
         // Restore clipboard
@@ -445,6 +468,26 @@ final class AccessibilityInteractor {
         #endif
         guard err == .success, let el = element else { return nil }
         return (el as! AXUIElement)
+    }
+
+    /// Polls kAXSelectedTextAttribute every 20ms until it returns a non-empty
+    /// string or the budget is exhausted. The initial read happens immediately
+    /// (at t=0 relative to the call) so fast apps incur no extra delay; the
+    /// loop only spins for apps that update AX asynchronously after a key macro.
+    /// 100ms default: combined with selectCurrentLine's 50ms sleep this gives a
+    /// 150ms window from macro to AX read — enough for any legitimately slow app
+    /// without adding 300ms latency when the macro is a no-op (caret at line start).
+    private func pollForSelectedText(from element: AXUIElement, timeoutMS: Int = 100) -> String? {
+        let steps = max(1, timeoutMS / 20)
+        for i in 0..<steps {
+            if let text = selectedText(from: element), !text.isEmpty {
+                return text
+            }
+            if i < steps - 1 {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+        }
+        return nil
     }
 
     private func selectedText(from element: AXUIElement) -> String? {

@@ -8,14 +8,14 @@
 ## Installation Methods
 
 ### Method 1: DMG Installer (Recommended)
-1. Download `KeySwap-1.3.0.dmg`
+1. Download `KeySwap-1.3.1.dmg`
 2. Double-click to mount the disk image
 3. Drag `KeySwap.app` onto the `Applications` shortcut in the DMG window
 4. Eject the disk image
 5. Open Applications and launch KeySwap
 
 ### Method 2: ZIP Archive
-1. Download `KeySwap-1.3.0.zip`
+1. Download `KeySwap-1.3.1.zip`
 2. Extract the archive
 3. Drag KeySwap.app to your Applications folder
 
@@ -44,7 +44,7 @@ When you first launch KeySwap:
 ### Basic Operation
 
 - **Hotkey**: Press your configured swap key (default: `F9`) to swap the last typed word
-- **Raw swap**: Hold `Shift` while pressing the hotkey to swap without spell-check corrections
+- **Raw swap**: Hold `Option` while pressing the hotkey to swap without spell-check corrections
 - **Revert**: Press `Ctrl+hotkey` to undo the last spell-check corrections (keeps the layout swap)
 - **Active Layouts**: Hebrew and English keyboard layouts
 - **Fallback Mechanism**: If Accessibility API is unavailable, a clipboard-based fallback is used
@@ -86,6 +86,9 @@ Open the Preferences window from the KeySwap menu bar icon to:
 ### "Characters not swapping"
 - Ensure the correct keyboard layouts are installed (Hebrew/English)
 - Check that you're using supported keyboard layouts
+
+### "Swap does nothing in Microsoft OneNote or similar apps"
+Some apps (including OneNote) commit their text selection to the Accessibility API asynchronously — the selection is visible on screen but not yet readable at the moment KeySwap checks. v1.3.1 adds a polling retry (up to 100ms) on the direct Accessibility path and a 150ms clipboard retry on the fallback path to handle this. If you are on v1.3.0 or earlier, upgrade to v1.3.1.
 
 ## Uninstallation
 
