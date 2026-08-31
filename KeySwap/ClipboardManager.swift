@@ -28,10 +28,20 @@ final class ClipboardManager {
     ///  4. Poll for paste completion
     ///  5. Restore clipboard
     ///
+    /// `reselectWholeLineBeforePaste` re-runs the whole-line selection macro
+    /// (Cmd+Left, Cmd+Shift+Right) immediately before Cmd+V. Cmd+V replaces the
+    /// current selection, so it is only correct while the text we translated is
+    /// still selected — and on some apps it isn't by the time we get here. See
+    /// `reselectWholeLine()` for why keystrokes are the only trustworthy way to
+    /// guarantee that. Pass true ONLY when the translated text is exactly one
+    /// whole logical line (SelectionOrigin.wholeLine); anything else and the
+    /// macro would select text that was never translated.
+    ///
     /// Returns true if paste was detected, false on timeout.
     func pasteViaClipboard(
         translatedText: String,
         axElement: AXElement,
+        reselectWholeLineBeforePaste: Bool = false,
         onComplete: @escaping (Bool) -> Void
     ) {
         // STEP 1: Lazy stash (eager dataForType: copy for all declared types)
@@ -57,33 +67,89 @@ final class ClipboardManager {
                 return
             }
 
-            // STEP 3: Fire Cmd+V
-            self.sendCmdV()
-
-            // STEP 4: Poll AX value for change (up to 500ms)
-            let previousValue = axElement.currentValue
-            if previousValue == nil {
-                // kAXValueAttribute not supported (Word notes/comments, some sandboxed
-                // fields). Polling nil==nil would never fire. Use a fixed 150ms wait
-                // — generous enough for the paste to land, short enough to stay snappy.
-                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
-                    self.restoreAndZero(snapshot)
-                    onComplete(true)
-                }
+            // STEP 3: Re-select the line (if asked), then fire Cmd+V.
+            guard reselectWholeLineBeforePaste else {
+                self.sendCmdV()
+                self.awaitPasteThenRestore(axElement: axElement, snapshot: snapshot, onComplete: onComplete)
                 return
             }
-            // Poll with a 250ms window. If the value changes (most well-behaved apps:
-            // TextEdit, Mail, etc.) we get early confirmation. If it doesn't change in
-            // 250ms — either the app's kAXValueAttribute is stale/non-real-time (Word's
-            // note panel) or the app is slow — we still report success: Cmd+V was already
-            // delivered to a field that passed editable validation, so the paste landed.
-            // Using the full 500ms deadline would exceed the 500ms pipeline SLA when
-            // combined with the ~80ms of synchronous steps that precede this call.
-            self.pollAXValue(element: axElement, previousValue: previousValue, deadline: Date().addingTimeInterval(0.25)) { _ in
-                // STEP 5: Restore clipboard regardless of outcome
+            #if DEBUG
+            print("[ClipboardManager] re-selecting whole line via keystrokes before paste")
+            #endif
+            self.reselectWholeLine { [weak self] in
+                guard let self else { return }
+                self.sendCmdV()
+                self.awaitPasteThenRestore(axElement: axElement, snapshot: snapshot, onComplete: onComplete)
+            }
+        }
+    }
+
+    /// Cmd+Left then Cmd+Shift+Right — the same whole-line macro the read path
+    /// used, replayed immediately before Cmd+V.
+    ///
+    /// Why keystrokes rather than an AX selection write: on Chromium/Electron
+    /// fields (Slack's search box is the known case) AX attribute reads and
+    /// writes are serviced asynchronously by the renderer, so neither
+    /// `kAXValueAttribute` nor the selection attributes reliably describe the
+    /// field during the write window — an AX write can report success, be
+    /// invisible to every subsequent AX read, and still land. Nothing built on
+    /// AX state can decide whether the selection survived. Synthetic key events
+    /// sidestep the question entirely: Cmd+Left, Cmd+Shift+Right and Cmd+V ride
+    /// the same event queue in order, so whatever the field holds by then, the
+    /// line is selected and the paste replaces it instead of appending a second
+    /// copy of the translation.
+    ///
+    /// Chained with asyncAfter rather than Thread.sleep — this runs on the main
+    /// queue, and the read path has already spent most of the 500ms SLA.
+    private func reselectWholeLine(completion: @escaping () -> Void) {
+        postKey(0x7B, flags: .maskCommand)                          // Cmd+Left
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(30)) { [weak self] in
+            guard let self else { return }
+            self.postKey(0x7C, flags: [.maskCommand, .maskShift])   // Cmd+Shift+Right
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(40)) {
+                completion()
+            }
+        }
+    }
+
+    private func postKey(_ key: CGKeyCode, flags: CGEventFlags) {
+        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+        guard let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false) else { return }
+        down.flags = flags
+        up.flags = flags
+        down.post(tap: .cgAnnotatedSessionEventTap)
+        up.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    /// STEP 4+5: wait for the paste to land, then restore the clipboard.
+    private func awaitPasteThenRestore(
+        axElement: AXElement,
+        snapshot: ClipboardSnapshot,
+        onComplete: @escaping (Bool) -> Void
+    ) {
+        let previousValue = axElement.currentValue
+        if previousValue == nil {
+            // kAXValueAttribute not supported (Word notes/comments, some sandboxed
+            // fields). Polling nil==nil would never fire. Use a fixed 150ms wait
+            // — generous enough for the paste to land, short enough to stay snappy.
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
                 self.restoreAndZero(snapshot)
                 onComplete(true)
             }
+            return
+        }
+        // Poll with a 250ms window. If the value changes (most well-behaved apps:
+        // TextEdit, Mail, etc.) we get early confirmation. If it doesn't change in
+        // 250ms — either the app's kAXValueAttribute is stale/non-real-time (Word's
+        // note panel) or the app is slow — we still report success: Cmd+V was already
+        // delivered to a field that passed editable validation, so the paste landed.
+        // Using the full 500ms deadline would exceed the 500ms pipeline SLA when
+        // combined with the ~80ms of synchronous steps that precede this call.
+        self.pollAXValue(element: axElement, previousValue: previousValue, deadline: Date().addingTimeInterval(0.25)) { _ in
+            // STEP 5: Restore clipboard regardless of outcome
+            self.restoreAndZero(snapshot)
+            onComplete(true)
         }
     }
 

@@ -5,6 +5,42 @@ All notable changes to KeySwap for macOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-08-31
+
+### Fixed
+
+- **Translated word still typed twice in Slack** — the 1.3.4 fix was aimed at the wrong mechanism. It assumed `kAXValueAttribute` was the only stale attribute and that the selection attributes could be trusted to reveal whether an AX write had landed. The Slack logs show they cannot: on Chromium/Electron fields, AX reads and writes are both serviced asynchronously by the renderer, so during the write window nothing AX reports about the field is reliable — an AX write can report success, stay invisible to every subsequent AX read, and still land. No gate built on AX state can decide whether the selection survived, which is why 1.3.4 changed nothing.
+
+  The paste no longer asks. When the text being translated is exactly one whole logical line (the case the line-selection macro produces, and the case Slack's search box hits), the whole-line macro is replayed with real keystrokes immediately before Cmd+V. Cmd+Left, Cmd+Shift+Right and Cmd+V ride the same event queue in order, so the line is provably selected when the paste arrives and the translation replaces it rather than being appended a second time — whatever the AX writes did or didn't do.
+
+### Changed
+
+- `ReadResult` now carries a `SelectionOrigin` (`userSelection` / `caretToLineStart` / `wholeLine`) instead of a `fallbackMacroUsed` Bool. The write path needs to know *which* macro produced the selection, not just that one did: replaying the whole-line macro over a caret-to-line-start selection would select text that was never translated and the paste would destroy it. `usedFallbackMacro` preserves the old Bool's meaning for the writing-direction flip.
+
+- The write path now logs its pre-write selection snapshot, the post-write selection state, and which branch the clipboard-fallback gate took (lengths and booleans only, never user text). The 1.3.4 gate logged only its suppress branch, so its logs could not distinguish "the original text is still there" from "the app would not tell us" — the two cases that need opposite fixes.
+
+## [1.3.4] - 2026-08-31
+
+### Fixed
+
+- **Translated word typed twice in Slack (and any app whose `kAXValueAttribute` is a stale mirror)** — Slack's search field is an Electron `AXComboBox` whose `kAXValueAttribute` never reflects the field's real text content. Both of `write()`'s verification steps read only that one attribute, so both reported "the write didn't land" even though the `kAXSelectedTextAttribute` write had in fact replaced the selection. `write()` returned `.needsClipboardFallback`, the pipeline fired Cmd+V into a field whose selection was already consumed, and the paste appended a second copy instead of replacing anything — the user saw `YoavYoav`. The 1.3.3 fix only widened the poll budget, which cannot help when the attribute is stale rather than slow.
+
+  Verification no longer depends on a single attribute. `write()` now also treats a consumed selection (the range moved, or the text under it changed) as proof the write landed, and every clipboard-fallback exit passes through a safety gate that re-asserts the pre-write selection and reads back what actually sits under it. If the original text is still there, the fallback proceeds — and the restored selection makes Cmd+V a replace rather than an insert. If something else is there, the write landed and the paste is suppressed. Read-backs the app can't answer keep the previous behavior, so apps that genuinely need Cmd+V (Word's note/comment panel) are unaffected.
+
+## [1.3.3] - 2026-08-08
+
+### Fixed
+
+- **Double-paste of the *same* translated text in Chrome/Chromium fields** — `write()` verified its own AX writes by reading `kAXValueAttribute` immediately after setting it, with no tolerance for apps that commit the change asynchronously (the same pattern as the 1.3.2 OneNote fix below, but on the write-verification side). Chrome's text fields can lag between the AX write landing and `kAXValueAttribute` reflecting it, so the immediate re-read saw the pre-write value, wrongly concluded the write had failed, and fell through to the Cmd+V clipboard fallback — pasting the same translated text a second time on top of a write that had already succeeded. Both write-verification checks (`kAXSelectedTextAttribute` and the `kAXValueAttribute` splice) now poll for up to 100ms before declaring failure, same budget and reasoning as the selection-read poll.
+
+## [1.3.2] - 2026-08-08
+
+### Fixed
+
+- **Double-paste with cursor stranded between the old and new word in OneNote** — The v1.3.1 OneNote fix polled `kAXSelectedTextAttribute` (the selection text) but never checked whether `kAXSelectedTextRangeAttribute` (the selection's offset range) had caught up. OneNote and similar canvas-based apps commit these two attributes asynchronously and independently, so the text could be readable before the range settled. Writing back against a still-collapsed range inserted the translation next to the untouched original word instead of replacing it, leaving the cursor between the two. The poll now waits for both signals to agree before trusting the selection; if they never agree it falls through to the pre-v1.3.1 safe clipboard path, same as before.
+
+- **Info.plist version stuck at 1.3.0 (12) since the 1.3.1 release** — The v1.3.1 version bump updated `VERSION`, `CHANGELOG.md`, and `TODOS.md` but missed `KeySwap/Info.plist`, so the About window kept showing "Version 1.3.0 (12)" through the entire 1.3.1 release. Corrected to match.
+
 ## [1.3.1] - 2026-06-14
 
 ### Fixed

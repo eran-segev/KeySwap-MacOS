@@ -536,16 +536,16 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
 
         let text: String
         let axElement: AXUIElement?
-        let fallbackUsed: Bool
+        let selectionOrigin: AccessibilityInteractor.SelectionOrigin
 
         switch readResult {
-        case .ax(let t, let el, let fb):
-            text = t; axElement = el; fallbackUsed = fb
+        case .ax(let t, let el, let o):
+            text = t; axElement = el; selectionOrigin = o
             #if DEBUG
-            print("[SwapPipeline] Step 1 OK (AX path): \"\(text.prefix(50))\" (len=\(text.count), fallback=\(fallbackUsed))")
+            print("[SwapPipeline] Step 1 OK (AX path): \"\(text.prefix(50))\" (len=\(text.count), origin=\(selectionOrigin))")
             #endif
-        case .clipboardOnly(let t, let fb):
-            text = t; axElement = nil; fallbackUsed = fb
+        case .clipboardOnly(let t, let o):
+            text = t; axElement = nil; selectionOrigin = o
             #if DEBUG
             print("[SwapPipeline] Step 1 OK (clipboard path): \"\(text.prefix(50))\" (len=\(text.count))")
             #endif
@@ -600,7 +600,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             #endif
         }
 
-        var translated = translationEngine.translate(textToTranslate, to: targetLanguage, fallbackMacroUsed: fallbackUsed)
+        var translated = translationEngine.translate(textToTranslate, to: targetLanguage, fallbackMacroUsed: selectionOrigin.usedFallbackMacro)
 
         // 3b. Uppercase characters recovered from Shift+letter keystrokes.
         // The user held Shift intentionally — preserve their capitalization intent.
@@ -689,7 +689,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             switch axResult {
             case .success:
                 layoutSwitcher.switchLayout(to: direction)
-                if fallbackUsed || isChromium {
+                if selectionOrigin.usedFallbackMacro || isChromium {
                     let dirResult = layoutSwitcher.flipWritingDirection(to: direction)
                     announceDirectionFlip(dirResult, to: direction)
                 }
@@ -705,14 +705,23 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
 
             case .needsClipboardFallback:
                 let axEl = AXElement(ref: el)
+                // Cmd+V replaces the current selection — but on Chromium/Electron
+                // fields the selection may already be gone by now (an AX write that
+                // reported failure can still land), and no AX read can tell us. When
+                // the text we translated is exactly one whole line, replay the
+                // whole-line macro with real keystrokes first: they ride the same
+                // event queue as the paste, so the line is provably selected when
+                // Cmd+V arrives and the translation replaces it instead of being
+                // appended a second time.
                 clipboardManager.pasteViaClipboard(
                     translatedText: translated,
-                    axElement: axEl
+                    axElement: axEl,
+                    reselectWholeLineBeforePaste: selectionOrigin.isWholeLine
                 ) { [weak self] pasted in
                     guard let self else { return }
                     if pasted {
                         self.layoutSwitcher.switchLayout(to: direction)
-                        if fallbackUsed || isChromium {
+                        if selectionOrigin.usedFallbackMacro || isChromium {
                             let dirResult = self.layoutSwitcher.flipWritingDirection(to: direction)
                             self.announceDirectionFlip(dirResult, to: direction)
                         }
@@ -746,7 +755,7 @@ final class KeySwapApp: NSObject, NSApplicationDelegate {
             ) { [weak self] in
                 guard let self else { return }
                 self.layoutSwitcher.switchLayout(to: direction)
-                if fallbackUsed || isChromium {
+                if selectionOrigin.usedFallbackMacro || isChromium {
                     let dirResult = self.layoutSwitcher.flipWritingDirection(to: direction)
                     self.announceDirectionFlip(dirResult, to: direction)
                 }
