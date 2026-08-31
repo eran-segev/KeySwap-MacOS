@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		08AE7D99689CF282B4CA7984 /* AppSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68B5A1AF3DF630EC77820041 /* AppSettingsTests.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* AccessibilityInteractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* AccessibilityInteractorTests.swift */; };
 		0C2545C46C4DDF641B8BAD83 /* AccessibilityInteractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ACB829C8286E8E36586558A /* AccessibilityInteractor.swift */; };
 		12D70ABA5F33BFAEEA555956 /* PermissionsRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E514C41049CD9FE430FB0053 /* PermissionsRouter.swift */; };
 		26A674FCE758A312970CD187 /* SwapModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF4FA133E0EF67AB402A1E7 /* SwapModeTests.swift */; };
@@ -46,6 +47,7 @@
 		08F92A30C431B6F94D6F81EB /* PreferencesWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesWindow.swift; sourceTree = "<group>"; };
 		0DD5462A41A636F3A1BE77B1 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		18BE506631C25D140A6D2161 /* SpellCheckProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpellCheckProviderTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5D /* AccessibilityInteractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityInteractorTests.swift; sourceTree = "<group>"; };
 		22F6B58CC2144F35D4B1799D /* KeySwap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KeySwap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		24DBC7BF8854D9D17407F5D8 /* ErrorFeedbackHUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorFeedbackHUD.swift; sourceTree = "<group>"; };
 		301F266CB47731D88E66C994 /* KeySwapTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KeySwapTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -92,6 +94,7 @@
 		32E65941AD5F5FEAAF9ED1A9 /* KeySwapTests */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F60718293A4B5D /* AccessibilityInteractorTests.swift */,
 				68B5A1AF3DF630EC77820041 /* AppSettingsTests.swift */,
 				7DA2ED0140922506CEE9D60B /* ErrorFeedbackHUDTests.swift */,
 				DC934FE9344C4F56D5D41DBE /* LayoutSwitcherMenuMatchTests.swift */,
@@ -241,6 +244,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				08AE7D99689CF282B4CA7984 /* AppSettingsTests.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* AccessibilityInteractorTests.swift in Sources */,
 				D4BB6606909075A5EDA803C1 /* ErrorFeedbackHUDTests.swift in Sources */,
 				4B96B9FA8C67D384DCE76684 /* LayoutSwitcherMenuMatchTests.swift in Sources */,
 				B7FB06B52E3025B0330F2E9C /* SpellCheckProviderTests.swift in Sources */,
