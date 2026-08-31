@@ -19,20 +19,42 @@ final class AccessibilityInteractor {
     /// Result of reading selected text. `.ax` means we have an AX element and can write back
     /// via AX. `.clipboardOnly` means AX failed (Electron apps etc.) and the pipeline must
     /// use Cmd+V to paste.
+    /// How the text we are about to translate came to be selected. The write
+    /// path needs this, not just a yes/no "was a macro used": re-running the
+    /// whole-line macro before a Cmd+V is only safe when the text we translated
+    /// WAS the whole line. Re-running it after a caret-to-line-start selection
+    /// would replace text we never translated.
+    enum SelectionOrigin {
+        /// The user's own selection. Never re-run a macro over this.
+        case userSelection
+        /// Macro #1: Cmd+Shift+Left, caret to logical line start. A partial line.
+        case caretToLineStart
+        /// Macro #2: Cmd+Left then Cmd+Shift+Right. The entire logical line.
+        case wholeLine
+
+        /// Whether a destructive selection macro fired — drives the paragraph
+        /// writing-direction flip, same meaning the old `fallbackMacroUsed` had.
+        var usedFallbackMacro: Bool { self != .userSelection }
+
+        /// Whether the selection covers exactly one whole logical line, so
+        /// re-selecting that line replaces precisely what we translated.
+        var isWholeLine: Bool { self == .wholeLine }
+    }
+
     enum ReadResult {
-        case ax(text: String, element: AXUIElement, fallbackMacroUsed: Bool)
-        case clipboardOnly(text: String, fallbackMacroUsed: Bool)
+        case ax(text: String, element: AXUIElement, origin: SelectionOrigin)
+        case clipboardOnly(text: String, origin: SelectionOrigin)
     }
 
     func readSelectedText() -> ReadResult? {
-        // Tracks whether any destructive selection macro (Cmd+Shift+Left /
-        // whole-line) has fired across the whole read operation — not just
-        // within the clipboard path. If we eventually return via
-        // .clipboardOnly, we need this flag to stay accurate so the pipeline
-        // knows whether to flip paragraph writing direction: running line
-        // macros in the AX branch then Cmd+C'ing the result in the clipboard
-        // branch must still report fallback=true.
-        var axMacrosFired = false
+        // Tracks how the selection we end up acting on was produced, across the
+        // whole read operation — not just within one branch. The macros mutate a
+        // single piece of UI state, so one shared variable is the accurate model:
+        // running line macros in the AX branch and then Cmd+C'ing the result in
+        // the clipboard branch must still report the macro that actually made the
+        // selection, both for the writing-direction flip and for the write path's
+        // re-selection safety check.
+        var origin: SelectionOrigin = .userSelection
 
         if let element = focusedElement() {
             #if DEBUG
@@ -47,7 +69,7 @@ final class AccessibilityInteractor {
                 #if DEBUG
                 print("[AXInteractor] readSelectedText: got selection directly (\(text.count) chars)")
                 #endif
-                return .ax(text: text, element: element, fallbackMacroUsed: false)
+                return .ax(text: text, element: element, origin: origin)
             }
 
             // Gate macro decisions on what AX says the element supports.
@@ -68,7 +90,7 @@ final class AccessibilityInteractor {
 
             if let range = rangeOpt, range.length > 0 {
                 if let text = copyExistingSelectionToClipboard(), !text.isEmpty {
-                    return .ax(text: text, element: element, fallbackMacroUsed: false)
+                    return .ax(text: text, element: element, origin: origin)
                 }
             }
 
@@ -80,7 +102,7 @@ final class AccessibilityInteractor {
                 // Fallback macro #1: Cmd+Shift+Left (extend selection from caret to
                 // logical line start). Works when caret is mid-line.
                 selectCurrentLine()
-                axMacrosFired = true
+                origin = .caretToLineStart
                 // Poll rather than read once — some apps (e.g. OneNote) update
                 // kAXSelectedTextAttribute asynchronously after a key macro lands,
                 // so a single read at t+50ms misses the selection even though it is
@@ -89,7 +111,7 @@ final class AccessibilityInteractor {
                     #if DEBUG
                     print("[AXInteractor] readSelectedText: Cmd+Shift+Left fallback got \(text.count) chars")
                     #endif
-                    return .ax(text: text, element: element, fallbackMacroUsed: true)
+                    return .ax(text: text, element: element, origin: origin)
                 }
 
                 // Fallback macro #2: Cmd+Left then Cmd+Shift+Right (caret to line
@@ -100,11 +122,12 @@ final class AccessibilityInteractor {
                 print("[AXInteractor] readSelectedText: macro #1 empty, trying whole-line macro...")
                 #endif
                 selectWholeLine()
+                origin = .wholeLine
                 if let text = pollForSelectedText(from: element), !text.isEmpty {
                     #if DEBUG
                     print("[AXInteractor] readSelectedText: whole-line fallback got \(text.count) chars")
                     #endif
-                    return .ax(text: text, element: element, fallbackMacroUsed: true)
+                    return .ax(text: text, element: element, origin: origin)
                 }
             }
         }
@@ -114,12 +137,11 @@ final class AccessibilityInteractor {
         #if DEBUG
         print("[AXInteractor] readSelectedText: AX failed, trying Cmd+C clipboard path...")
         #endif
-        if let result = readSelectionViaClipboard(), !result.text.isEmpty {
-            let effectiveFallback = result.fallbackMacroUsed || axMacrosFired
+        if let text = readSelectionViaClipboard(origin: &origin), !text.isEmpty {
             #if DEBUG
-            print("[AXInteractor] readSelectedText: clipboard path got \(result.text.count) chars (fallback=\(effectiveFallback))")
+            print("[AXInteractor] readSelectedText: clipboard path got \(text.count) chars (origin=\(origin))")
             #endif
-            return .clipboardOnly(text: result.text, fallbackMacroUsed: effectiveFallback)
+            return .clipboardOnly(text: text, origin: origin)
         }
 
         #if DEBUG
@@ -132,15 +154,14 @@ final class AccessibilityInteractor {
 
     /// Sends Cmd+C, reads the clipboard, then restores the previous clipboard contents.
     /// If nothing is selected, tries Cmd+Shift+Left first to select the current line.
-    /// Returns the text and whether the line-selection fallback was used (so the
-    /// caller can decide whether to flip paragraph writing direction post-swap).
-    private func readSelectionViaClipboard() -> (text: String, fallbackMacroUsed: Bool)? {
+    /// Updates `origin` in place as macros fire, so the caller keeps an accurate
+    /// picture of what made the selection even when AX-branch macros already ran.
+    private func readSelectionViaClipboard(origin: inout SelectionOrigin) -> String? {
         let pasteboard = NSPasteboard.general
         let stashedItems = stashClipboard()
 
         // First attempt: Cmd+C on whatever is already selected
         var text = copyViaClipboard(pasteboard: pasteboard)
-        var fallbackUsed = false
 
         if text == nil {
             // Macro #1: Cmd+Shift+Left (cursor to line start). Works when
@@ -149,7 +170,7 @@ final class AccessibilityInteractor {
             print("[AXInteractor] clipboard path: no selection, sending Cmd+Shift+Left then Cmd+C")
             #endif
             selectCurrentLine()
-            fallbackUsed = true
+            origin = .caretToLineStart
             text = copyViaClipboard(pasteboard: pasteboard)
             // Retry with extra wait: some apps (e.g. OneNote) commit the selection
             // asynchronously after the macro key lands. The 50ms sleep inside
@@ -172,6 +193,7 @@ final class AccessibilityInteractor {
             print("[AXInteractor] clipboard path: macro #1 empty, sending whole-line macro then Cmd+C")
             #endif
             selectWholeLine()
+            origin = .wholeLine
             text = copyViaClipboard(pasteboard: pasteboard)
             if text == nil {
                 #if DEBUG
@@ -185,8 +207,7 @@ final class AccessibilityInteractor {
         // Restore clipboard
         restoreClipboard(stashedItems)
 
-        guard let t = text else { return nil }
-        return (t, fallbackUsed)
+        return text
     }
 
     /// Cmd+C the user's existing visual selection (no fallback macros).
@@ -358,6 +379,9 @@ final class AccessibilityInteractor {
             ? NSRange(location: selRange.location, length: selRange.length)
             : nil
         let originalSelectedText = selectedText(from: element)
+        #if DEBUG
+        print("[AXInteractor] write: pre-write range=\(originalRange.map { "{\($0.location),\($0.length)}" } ?? "nil"), selLen=\(originalSelectedText?.utf16.count ?? -1), valueLen=\(currentValue(of: element)?.utf16.count ?? -1)")
+        #endif
 
         // Preferred: write to selected text (replaces selection).
         let selErr = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString)
@@ -402,7 +426,7 @@ final class AccessibilityInteractor {
             // kAXValueAttribute never showed the written text within the poll budget —
             // app returned success but silently ignored the write (known Electron pattern).
             #if DEBUG
-            print("[AXInteractor] kAXSelectedTextAttribute returned success but text didn't change — falling back")
+            print("[AXInteractor] kAXSelectedTextAttribute returned success but text didn't change — falling back (post-write range=\(currentSelectionRange(of: element).map { "{\($0.location),\($0.length)}" } ?? "nil"), selLen=\(selectedText(from: element)?.utf16.count ?? -1), valueLen=\(currentValue(of: element)?.utf16.count ?? -1))")
             #endif
         }
 
@@ -518,6 +542,9 @@ final class AccessibilityInteractor {
     ) -> WriteResult {
         guard let originalText, !originalText.isEmpty,
               let originalRange, originalRange.length > 0 else {
+            #if DEBUG
+            print("[AXInteractor] fallback gate: no pre-write selection snapshot — cannot judge, pasting")
+            #endif
             return .needsClipboardFallback
         }
 
@@ -525,6 +552,12 @@ final class AccessibilityInteractor {
         let reselected = pollForNonEmptySelectedText(from: element)
 
         if Self.fallbackIsSafe(originalText: originalText, reselectedText: reselected) {
+            #if DEBUG
+            let verdict = (reselected ?? "").isEmpty
+                ? "re-selection unreadable — cannot judge"
+                : "original text still present — no AX write landed"
+            print("[AXInteractor] fallback gate: \(verdict) (reselectedLen=\(reselected?.utf16.count ?? -1)), pasting")
+            #endif
             return .needsClipboardFallback
         }
 

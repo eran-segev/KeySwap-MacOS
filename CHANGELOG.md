@@ -5,6 +5,20 @@ All notable changes to KeySwap for macOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-08-31
+
+### Fixed
+
+- **Translated word still typed twice in Slack** — the 1.3.4 fix was aimed at the wrong mechanism. It assumed `kAXValueAttribute` was the only stale attribute and that the selection attributes could be trusted to reveal whether an AX write had landed. The Slack logs show they cannot: on Chromium/Electron fields, AX reads and writes are both serviced asynchronously by the renderer, so during the write window nothing AX reports about the field is reliable — an AX write can report success, stay invisible to every subsequent AX read, and still land. No gate built on AX state can decide whether the selection survived, which is why 1.3.4 changed nothing.
+
+  The paste no longer asks. When the text being translated is exactly one whole logical line (the case the line-selection macro produces, and the case Slack's search box hits), the whole-line macro is replayed with real keystrokes immediately before Cmd+V. Cmd+Left, Cmd+Shift+Right and Cmd+V ride the same event queue in order, so the line is provably selected when the paste arrives and the translation replaces it rather than being appended a second time — whatever the AX writes did or didn't do.
+
+### Changed
+
+- `ReadResult` now carries a `SelectionOrigin` (`userSelection` / `caretToLineStart` / `wholeLine`) instead of a `fallbackMacroUsed` Bool. The write path needs to know *which* macro produced the selection, not just that one did: replaying the whole-line macro over a caret-to-line-start selection would select text that was never translated and the paste would destroy it. `usedFallbackMacro` preserves the old Bool's meaning for the writing-direction flip.
+
+- The write path now logs its pre-write selection snapshot, the post-write selection state, and which branch the clipboard-fallback gate took (lengths and booleans only, never user text). The 1.3.4 gate logged only its suppress branch, so its logs could not distinguish "the original text is still there" from "the app would not tell us" — the two cases that need opposite fixes.
+
 ## [1.3.4] - 2026-08-31
 
 ### Fixed

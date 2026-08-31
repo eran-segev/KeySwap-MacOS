@@ -197,3 +197,28 @@ struct FallbackIsSafeTests {
         #expect(AccessibilityInteractor.fallbackIsSafe(originalText: "", reselectedText: "Yoav") == true)
     }
 }
+
+@Suite("AccessibilityInteractor.SelectionOrigin")
+struct SelectionOriginTests {
+
+    typealias Origin = AccessibilityInteractor.SelectionOrigin
+
+    @Test("Only the whole-line macro may be replayed before a Cmd+V")
+    func onlyWholeLineIsReplayable() {
+        // Replaying the whole-line macro over a user selection or a
+        // caret-to-line-start selection would select text that was never
+        // translated, and the paste would destroy it.
+        #expect(Origin.wholeLine.isWholeLine == true)
+        #expect(Origin.caretToLineStart.isWholeLine == false)
+        #expect(Origin.userSelection.isWholeLine == false)
+    }
+
+    @Test("Both macros count as a fallback macro; a user selection does not")
+    func fallbackMacroFlag() {
+        // Drives the paragraph writing-direction flip — same meaning the old
+        // fallbackMacroUsed Bool carried.
+        #expect(Origin.userSelection.usedFallbackMacro == false)
+        #expect(Origin.caretToLineStart.usedFallbackMacro == true)
+        #expect(Origin.wholeLine.usedFallbackMacro == true)
+    }
+}
