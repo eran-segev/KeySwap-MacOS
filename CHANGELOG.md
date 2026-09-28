@@ -5,6 +5,12 @@ All notable changes to KeySwap for macOS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-09-28
+
+### Packaging
+
+- First installer release since 1.3.1. Consolidates the 1.3.2–1.3.5 patch fixes (OneNote async-selection range agreement, Info.plist version correction, and the Slack Electron double-paste fix) into a single DMG. No functional changes beyond those already-released patches — bumped to the next minor version per project convention for installation-file releases.
+
 ## [1.3.5] - 2026-08-31
 
 ### Fixed
